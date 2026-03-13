@@ -1,0 +1,43 @@
+{
+  "name": "@bambsdev/auth",
+  "version": "1.0.2",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "prepublishOnly": "bun run build"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "drizzle-orm": ">=0.36.0",
+    "hono": ">=4.0.0",
+    "pg": ">=8.0.0",
+    "zod": ">=4.0.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260301.1",
+    "@types/bun": "latest",
+    "@types/pg": "^8.18.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.9.3",
+    "drizzle-orm": "^0.36.4",
+    "hono": "^4.12.3",
+    "pg": "^8.19.0",
+    "zod": "^4.3.6"
+  }
+}
