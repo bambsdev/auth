@@ -43,7 +43,7 @@ function makeServices(c: AppContext) {
   );
   const imageFilter = new ImageFilterService(c.env.AI);
   const settingService = new SettingService(db, authService, imageFilter);
-  const audit = new AuditService(c.env.BUKUKITA_ANALYTICS);
+  const audit = new AuditService(c.env.ANALYTICS);
   return { settingService, cacheService, imageFilter, audit };
 }
 

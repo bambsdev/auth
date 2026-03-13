@@ -59,7 +59,7 @@ function makeServices(c: AppContext) {
     c.env.JWT_SECRET,
     c.env.JWT_REFRESH_SECRET,
   );
-  const audit = new AuditService(c.env.BUKUKITA_ANALYTICS);
+  const audit = new AuditService(c.env.ANALYTICS);
   const emailService = new EmailService(c.env.RESEND_API_KEY, c.env.APP_URL);
   const verificationService = new VerificationService(db);
   const imageFilter = new ImageFilterService(c.env.AI);

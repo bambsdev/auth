@@ -5,7 +5,7 @@ import type { ClientType } from "../config/token.config";
 export type Bindings = {
   HYPERDRIVE: Hyperdrive;
   KV: KVNamespace;
-  BUKUKITA_ANALYTICS: AnalyticsEngineDataset;
+  ANALYTICS: AnalyticsEngineDataset;
   JWT_SECRET: string;
   JWT_REFRESH_SECRET: string;
   RESEND_API_KEY: string;

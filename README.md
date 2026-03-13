@@ -78,7 +78,7 @@ binding = "KV"
 id = "your-kv-id"
 
 [[analytics_engine_datasets]]
-binding = "BUKUKITA_ANALYTICS"
+binding = "ANALYTICS"
 
 [ai]
 binding = "AI"
@@ -87,6 +87,7 @@ binding = "AI"
 ### Environment Secrets
 
 Set via CLI:
+
 ```bash
 wrangler secret put JWT_SECRET
 wrangler secret put JWT_REFRESH_SECRET
@@ -140,47 +141,50 @@ export * from "@bambsdev/auth"; // re-export semua auth tables
 
 Setelah di-mount ke `/auth`, endpoint berikut tersedia:
 
-| Method   | Path                       | Auth   | Deskripsi                        |
-| -------- | -------------------------- | ------ | -------------------------------- |
-| `POST`   | `/auth/register`           | Public | Registrasi user baru             |
-| `POST`   | `/auth/login`              | Public | Login dengan email & password    |
-| `POST`   | `/auth/refresh`            | Public | Rotate refresh token             |
-| `POST`   | `/auth/logout`             | 🔒     | Logout (revoke current session)  |
-| `POST`   | `/auth/logout-all`         | 🔒     | Logout dari semua device         |
-| `GET`    | `/auth/sessions`           | 🔒     | Lihat semua sesi aktif           |
-| `DELETE` | `/auth/sessions/:id`       | 🔒     | Revoke sesi tertentu             |
-| `GET`    | `/auth/verify-email`       | Public | Verifikasi email via token       |
-| `POST`   | `/auth/resend-verification`| Public | Kirim ulang email verifikasi     |
-| `GET`    | `/auth/google/login`       | Public | Redirect ke Google consent (web) |
-| `GET`    | `/auth/google/callback`    | Public | Handle callback dari Google      |
-| `POST`   | `/auth/google/token`       | Public | Verify Google ID token (mobile)  |
+| Method   | Path                        | Auth   | Deskripsi                        |
+| -------- | --------------------------- | ------ | -------------------------------- |
+| `POST`   | `/auth/register`            | Public | Registrasi user baru             |
+| `POST`   | `/auth/login`               | Public | Login dengan email & password    |
+| `POST`   | `/auth/refresh`             | Public | Rotate refresh token             |
+| `POST`   | `/auth/logout`              | 🔒     | Logout (revoke current session)  |
+| `POST`   | `/auth/logout-all`          | 🔒     | Logout dari semua device         |
+| `GET`    | `/auth/sessions`            | 🔒     | Lihat semua sesi aktif           |
+| `DELETE` | `/auth/sessions/:id`        | 🔒     | Revoke sesi tertentu             |
+| `GET`    | `/auth/verify-email`        | Public | Verifikasi email via token       |
+| `POST`   | `/auth/resend-verification` | Public | Kirim ulang email verifikasi     |
+| `GET`    | `/auth/google/login`        | Public | Redirect ke Google consent (web) |
+| `GET`    | `/auth/google/callback`     | Public | Handle callback dari Google      |
+| `POST`   | `/auth/google/token`        | Public | Verify Google ID token (mobile)  |
 
 ## Settings Endpoints
 
 Setelah di-mount ke `/api/settings`:
 
-| Method | Path                      | Auth | Deskripsi               |
-| ------ | ------------------------- | ---- | ----------------------- |
-| `GET`  | `/api/settings/profile`   | 🔒   | Get user profile        |
-| `PUT`  | `/api/settings/profile`   | 🔒   | Update username/name    |
-| `PUT`  | `/api/settings/password`  | 🔒   | Change password         |
-| `PUT`  | `/api/settings/avatar`    | 🔒   | Update avatar URL       |
+| Method | Path                     | Auth | Deskripsi            |
+| ------ | ------------------------ | ---- | -------------------- |
+| `GET`  | `/api/settings/profile`  | 🔒   | Get user profile     |
+| `PUT`  | `/api/settings/profile`  | 🔒   | Update username/name |
+| `PUT`  | `/api/settings/password` | 🔒   | Change password      |
+| `PUT`  | `/api/settings/avatar`   | 🔒   | Update avatar URL    |
 
 ---
 
 ## Exports
 
 ### Routes
+
 ```typescript
 import { authRoutes, settingRoutes } from "@bambsdev/auth";
 ```
 
 ### Middleware
+
 ```typescript
 import { dbMiddleware, customLogger, authMiddleware } from "@bambsdev/auth";
 ```
 
 ### DB Schema & Types
+
 ```typescript
 import { schema, users, refreshTokens } from "@bambsdev/auth";
 import type { AuthBindings, AuthVariables, DB } from "@bambsdev/auth";
@@ -188,6 +192,7 @@ import type { JWTAccessPayload, JWTRefreshPayload } from "@bambsdev/auth";
 ```
 
 ### Utilities
+
 ```typescript
 import { ImageFilterService, parseBody } from "@bambsdev/auth";
 import { registerSchema, loginSchema, refreshSchema } from "@bambsdev/auth";
