@@ -91,9 +91,22 @@ function getIp(c: AppContext): string {
 
 // ── Standarisasi response error ───────────────────────────────────────────────
 function errorResponse(c: AppContext, err: any) {
-  const status = err.status ?? 500;
-  const code = err.code ?? "INTERNAL_ERROR";
-  return c.json({ error: { code, message: err.message } }, status);
+  const isAppError = typeof err.status === "number" && typeof err.code === "string";
+  let status = isAppError ? err.status : 500;
+  let code = isAppError ? err.code : "INTERNAL_ERROR";
+  let message = isAppError ? err.message : "Terjadi kesalahan pada server";
+
+  if (!isAppError && (err.code === "23505" || String(err.message).includes("duplicate key") || String(err.message).includes("unique constraint") || String(err.message).includes("Failed query"))) {
+    status = 409;
+    code = "CONFLICT";
+    message = "Data sudah terdaftar atau terjadi duplikasi";
+  }
+
+  if (status >= 500) {
+    console.error("[Internal Error]", err);
+  }
+
+  return c.json({ error: { code, message } }, status as any);
 }
 
 // ╔══════════════════════════════════════════════════════════════╗

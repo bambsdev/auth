@@ -67,20 +67,4 @@ export type AuditEvent =
   | "profile_updated"
   | "password_changed"
   | "avatar_updated"
-  | "avatar_blocked"
-  // Content
-  | "post_created"
-  | "post_published"
-  | "post_updated"
-  | "post_deleted"
-  | "post_liked"
-  | "post_unliked"
-  | "comment_created"
-  | "comment_updated"
-  | "comment_deleted"
-  | "tag_created"
-  // Moderation
-  | "report_created"
-  | "report_reviewed"
-  | "admin_promoted"
-  | "admin_demoted";
+  | "avatar_blocked";

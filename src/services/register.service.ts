@@ -46,12 +46,17 @@ export class RegisterService {
         fullName: fullName ?? derived,
         isActive: true,
       })
+      .onConflictDoNothing()
       .returning({
         id: users.id,
         email: users.email,
         fullName: users.fullName,
         createdAt: users.createdAt,
       });
+
+    if (!created) {
+      fail("Email sudah terdaftar", "EMAIL_TAKEN", 409);
+    }
 
     return created as RegisterResult;
   }
