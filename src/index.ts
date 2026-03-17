@@ -31,3 +31,6 @@ export type {
 export { ImageFilterService } from "./utils/image-filter";
 export * from "./utils/validation";
 export { parseBody } from "./utils/validation";
+
+// ── Services ──────────────────────────────────────────────────────────────────
+export { cleanupExpiredTokens } from "./services/token.service";
