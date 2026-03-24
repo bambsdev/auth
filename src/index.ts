@@ -33,4 +33,5 @@ export * from "./utils/validation";
 export { parseBody } from "./utils/validation";
 
 // ── Services ──────────────────────────────────────────────────────────────────
-export { cleanupExpiredTokens } from "./services/token.service";
+export { cleanupExpiredTokens, cleanupExpiredPasswordResets } from "./services/token.service";
+export { R2UploadService, extractR2KeyFromUrl } from "./services/r2-upload.service";

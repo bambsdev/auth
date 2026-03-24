@@ -10,10 +10,13 @@ export type Bindings = {
   JWT_REFRESH_SECRET: string;
   RESEND_API_KEY: string;
   APP_URL: string; // base URL untuk verification link
+  EMAIL_FROM?: string; // (Opsional) email pengirim default
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
   AI: Ai; // Cloudflare Workers AI binding
   LOCAL_DATABASE_URL?: string; // used to bypass local hyperdrive proxy
+  BUCKET?: R2Bucket; // R2 Bucket untuk upload public files
+  BUCKET_PUBLIC_URL?: string; // Base URL public bucket (opsional)
 };
 
 // ── Hono Context Variables (injected per-request) ─────────────────────────────
@@ -22,7 +25,16 @@ export type Variables = {
   jti: string;
   clientType: ClientType;
   db: import("../db/client").DB;
+  emailConfig?: EmailConfig; // Injeksi config email dari consumer
 };
+
+export interface EmailConfig {
+  from: string;
+  templates?: {
+    verification?: (url: string) => string;
+    forgotPassword?: (url: string) => string;
+  };
+}
 
 // ── JWT Payloads ──────────────────────────────────────────────────────────────
 export interface JWTAccessPayload {
@@ -67,4 +79,7 @@ export type AuditEvent =
   | "profile_updated"
   | "password_changed"
   | "avatar_updated"
-  | "avatar_blocked";
+  | "avatar_blocked"
+  // Password Reset
+  | "forgot_password_requested"
+  | "password_reset_success";

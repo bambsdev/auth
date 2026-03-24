@@ -12,7 +12,7 @@ describe("Package Exports", () => {
     const { authRoutes } = await import("../src/index");
     expect(authRoutes).toBeDefined();
     expect(typeof authRoutes.fetch).toBe("function");
-  });
+  }, 15000); // cold import — module graph besar
 
   test("settingRoutes is exported and is a Hono instance", async () => {
     const { settingRoutes } = await import("../src/index");

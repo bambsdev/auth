@@ -7,6 +7,7 @@ import { eq, and } from "drizzle-orm";
 import { users, refreshTokens } from "../db/schema";
 import { hashPassword, verifyPassword } from "../utils/password";
 import { fail } from "../utils/error";
+import { extractR2KeyFromUrl } from "./r2-upload.service";
 import type { DB } from "../db/client";
 import type { ImageFilterService } from "../utils/image-filter";
 import type { AuthService } from "./auth.service";
@@ -184,11 +185,80 @@ export class SettingService {
     return tokens;
   }
 
-  // ── Update Avatar ────────────────────────────────────────────────────────
+  // ── Check User Exists ───────────────────────────────────────────────────
+  // Dipakai untuk validasi user sebelum upload ke R2.
 
-  async updateAvatar(userId: string, avatarUrl: string | null) {
+  async checkUserExists(userId: string): Promise<{ avatarUrl: string | null }> {
+    const user = await this.db.query.users.findFirst({
+      where: eq(users.id, userId),
+      columns: { id: true, avatarUrl: true },
+    });
+
+    if (!user) {
+      fail("User tidak ditemukan", "USER_NOT_FOUND", 404);
+    }
+
+    return { avatarUrl: user.avatarUrl };
+  }
+
+  // ── Update Avatar URL in DB ─────────────────────────────────────────────
+  // Simpan avatar URL baru ke database. Dipanggil SETELAH upload ke R2 sukses.
+
+  async updateAvatarUrl(userId: string, avatarUrl: string | null) {
+    return await this.db.transaction(async (tx) => {
+      // 1. Ambil URL avatar lama secara fresh tanpa cache Hyperdrive
+      const existing = await tx.query.users.findFirst({
+        where: eq(users.id, userId),
+        columns: { avatarUrl: true },
+      });
+
+      if (!existing) {
+        fail("User tidak ditemukan", "USER_NOT_FOUND", 404);
+      }
+
+      // 2. Lakukan update URL avatar baru
+      const [updated] = await tx
+        .update(users)
+        .set({ avatarUrl, updatedAt: new Date() })
+        .where(eq(users.id, userId))
+        .returning({
+          id: users.id,
+          avatarUrl: users.avatarUrl,
+          updatedAt: users.updatedAt,
+        });
+
+      if (!updated) {
+        fail("Gagal memperbarui avatar", "UPDATE_AVATAR_FAILED", 500);
+      }
+
+      return { updated, oldAvatarUrl: existing.avatarUrl };
+    });
+  }
+
+  // ── Update Avatar from URL (JSON mode) ──────────────────────────────────
+  // Mode lama: user kirim URL avatar sebagai JSON body.
+
+  async updateAvatarFromUrl(
+    userId: string,
+    avatarUrl: string | null,
+    bucket?: R2Bucket,
+    bucketPublicUrl?: string,
+  ) {
     // Jika user ingin menghapus avatar (null), langsung set null
     if (avatarUrl === null) {
+      // Cek avatar lama dulu untuk dihapus (karena diset null)
+      const currentUser = await this.db.query.users.findFirst({
+        where: eq(users.id, userId),
+        columns: { avatarUrl: true },
+      });
+
+      const oldKey = extractR2KeyFromUrl(currentUser?.avatarUrl ?? null, bucketPublicUrl);
+      if (oldKey && bucket) {
+        bucket.delete(oldKey).catch((err) =>
+          console.error(`[setting] Gagal hapus R2 lama: ${oldKey}`, err)
+        );
+      }
+
       const [updated] = await this.db
         .update(users)
         .set({ avatarUrl: null, updatedAt: new Date() })
@@ -221,6 +291,12 @@ export class SettingService {
       };
     }
 
+    // Ambil URL lama dari DB untuk nantinya dihapus jika ada di r2 kita
+    const currentUser = await this.db.query.users.findFirst({
+      where: eq(users.id, userId),
+      columns: { avatarUrl: true },
+    });
+
     const [updated] = await this.db
       .update(users)
       .set({ avatarUrl, updatedAt: new Date() })
@@ -230,6 +306,14 @@ export class SettingService {
         avatarUrl: users.avatarUrl,
         updatedAt: users.updatedAt,
       });
+      
+    // Hapus data lama yang ada di R2 jika berganti dengan url eksternal
+    const oldKey = extractR2KeyFromUrl(currentUser?.avatarUrl ?? null, bucketPublicUrl);
+    if (oldKey && bucket) {
+      bucket.delete(oldKey).catch((err) =>
+        console.error(`[setting] Gagal hapus R2 lama: ${oldKey}`, err)
+      );
+    }
 
     return { ...updated, blocked: false };
   }

@@ -60,6 +60,26 @@ export const resendVerificationSchema = z.object({
     .transform((v) => v.toLowerCase().trim()),
 });
 
+// ── Forgot Password ───────────────────────────────────────────────────────────
+
+export const forgotPasswordSchema = z.object({
+  email: z
+    .string()
+    .email("Format email tidak valid")
+    .transform((v) => v.toLowerCase().trim()),
+});
+
+// ── Reset Password ────────────────────────────────────────────────────────────
+
+export const resetPasswordSchema = z.object({
+  token: z.string().min(1, "Token reset wajib diisi"),
+  newPassword: z
+    .string()
+    .min(8, "Password baru minimal 8 karakter")
+    .regex(/[A-Z]/, "Password baru harus ada huruf kapital")
+    .regex(/[0-9]/, "Password baru harus ada angka"),
+});
+
 // ── Google Token (Mobile Flow) ────────────────────────────────────────────────
 
 export const googleTokenSchema = z.object({

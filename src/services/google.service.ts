@@ -46,6 +46,7 @@ export class GoogleOAuthService {
     private readonly imageFilter: ImageFilterService,
     private readonly clientId: string,
     private readonly clientSecret: string,
+    private readonly bucketPublicUrl?: string,
   ) {}
 
   // ── Web Flow: Generate Authorization URL ─────────────────────────────────
@@ -198,17 +199,29 @@ export class GoogleOAuthService {
       // Update profil di users — termasuk username jika masih kosong
       const existUser = await this.db.query.users.findFirst({
         where: eq(users.id, existingOAuth.userId),
-        columns: { id: true, username: true },
+        columns: { id: true, username: true, avatarUrl: true, fullName: true },
       });
       const userUpdates: Record<string, any> = {
-        fullName: googleUser.name ?? null,
-        avatarUrl: filteredAvatar,
         updatedAt: new Date(),
       };
-      if (existUser && !existUser.username) {
-        userUpdates.username = await this.resolveUniqueUsername(
-          email.split("@")[0],
-        );
+      if (existUser) {
+        if (!existUser.username) {
+          userUpdates.username = await this.resolveUniqueUsername(
+            email.split("@")[0],
+          );
+        }
+        // Jangan timpa (overwrite) custom name / avatar yang mungkin diatur user
+        if (!existUser.fullName && googleUser.name) {
+          userUpdates.fullName = googleUser.name;
+        }
+        if (filteredAvatar) {
+          const isCustomAvatar =
+            this.bucketPublicUrl &&
+            existUser.avatarUrl?.startsWith(this.bucketPublicUrl);
+          if (!isCustomAvatar) {
+            userUpdates.avatarUrl = filteredAvatar;
+          }
+        }
       }
       await this.db
         .update(users)
@@ -252,10 +265,15 @@ export class GoogleOAuthService {
       );
 
       // Update user: set email verified (Google sudah verify), update avatar, update name, set username if null
+      const isCustomAvatar =
+        this.bucketPublicUrl &&
+        existingUser.avatarUrl?.startsWith(this.bucketPublicUrl);
       const linkUpdates: Record<string, any> = {
         isEmailVerified: true,
         fullName: googleUser.name ?? existingUser.fullName ?? null,
-        avatarUrl: filteredAvatar ?? existingUser.avatarUrl ?? null,
+        avatarUrl: isCustomAvatar
+          ? existingUser.avatarUrl
+          : filteredAvatar ?? existingUser.avatarUrl ?? null,
         updatedAt: new Date(),
       };
       if (!existingUser.username) {

@@ -2,7 +2,7 @@
 
 > 🔐 Drop-in authentication module for **Hono + Cloudflare Workers + Drizzle ORM** apps.
 
-Full-featured auth system yang bisa langsung di-mount ke project Hono manapun — tanpa perlu menulis ulang logic register, login, JWT, OAuth, session management, atau user settings.
+Full-featured auth system yang bisa langsung di-mount ke project Hono manapun — tanpa perlu menulis ulang logic register, login, JWT, OAuth, session management, password reset, atau user settings (termasuk avatar upload ke R2).
 
 ## Install
 
@@ -61,6 +61,7 @@ compatibility_date = "2024-12-01"
 
 [vars]
 APP_URL = "https://myapp.com"
+BUCKET_PUBLIC_URL = "https://pub-xxxx.r2.dev" # (Opsional) URL public bucket R2
 
 # Secrets (set via `wrangler secret put`)
 # JWT_SECRET
@@ -82,6 +83,10 @@ binding = "ANALYTICS"
 
 [ai]
 binding = "AI"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "your-bucket-name"
 ```
 
 ### Environment Secrets
@@ -133,7 +138,29 @@ export * from "@bambsdev/auth"; // re-export semua auth tables
 | `users`              | Data user (email, password, dll) |
 | `refreshTokens`      | Refresh token per device/session |
 | `emailVerifications` | Token verifikasi email           |
+| `passwordResets`     | Token reset password             |
 | `oauthAccounts`      | Akun OAuth terhubung (Google)    |
+
+---
+
+## Cron Jobs (Cleanup)
+
+Library ini menyediakan fungsi utilitas untuk menghapus expired tokens secara berkala. Tambahkan cron ini pada worker-mu:
+
+```typescript
+// src/index.ts
+import { cleanupExpiredTokens, cleanupExpiredPasswordResets } from "@bambsdev/auth";
+
+export default {
+  // ... handler fetch
+  async scheduled(event, env, ctx) {
+    if (event.cron === "0 0 * * *") { // Setiap hari jam 00:00
+      ctx.waitUntil(cleanupExpiredTokens(env.DATABASE_URL));
+      ctx.waitUntil(cleanupExpiredPasswordResets(env.DATABASE_URL));
+    }
+  }
+}
+```
 
 ---
 
@@ -152,6 +179,8 @@ Setelah di-mount ke `/auth`, endpoint berikut tersedia:
 | `DELETE` | `/auth/sessions/:id`        | 🔒     | Revoke sesi tertentu             |
 | `GET`    | `/auth/verify-email`        | Public | Verifikasi email via token       |
 | `POST`   | `/auth/resend-verification` | Public | Kirim ulang email verifikasi     |
+| `POST`   | `/auth/forgot-password`     | Public | Request email reset password     |
+| `POST`   | `/auth/reset-password`      | Public | Reset password dengan token      |
 | `GET`    | `/auth/google/login`        | Public | Redirect ke Google consent (web) |
 | `GET`    | `/auth/google/callback`     | Public | Handle callback dari Google      |
 | `POST`   | `/auth/google/token`        | Public | Verify Google ID token (mobile)  |
@@ -160,60 +189,77 @@ Setelah di-mount ke `/auth`, endpoint berikut tersedia:
 
 Setelah di-mount ke `/api/settings`:
 
-| Method | Path                     | Auth | Deskripsi            |
-| ------ | ------------------------ | ---- | -------------------- |
-| `GET`  | `/api/settings/profile`  | 🔒   | Get user profile     |
-| `PUT`  | `/api/settings/profile`  | 🔒   | Update username/name |
-| `PUT`  | `/api/settings/password` | 🔒   | Change password      |
-| `PUT`  | `/api/settings/avatar`   | 🔒   | Update avatar URL    |
+| Method | Path                        | Auth | Deskripsi                         |
+| ------ | --------------------------- | ---- | --------------------------------- |
+| `GET`  | `/api/settings/profile`     | 🔒   | Get user profile                  |
+| `PUT`  | `/api/settings/profile`     | 🔒   | Update username/name              |
+| `PUT`  | `/api/settings/password`    | 🔒   | Change password                   |
+| `PUT`  | `/api/settings/avatar`      | 🔒   | Update avatar (form-data or JSON) |
+| `GET`  | `/api/settings/avatar-file/*`| Public| Proxy avatar file (fallback jika tak ada BUCKET_PUBLIC_URL) |
+
+---
+
+## Validasi & Keamanan Endpoint Avatar
+
+Endpoint `/api/settings/avatar` dapat menerima body dengan 2 macam format:
+
+1. **`multipart/form-data`**: Avatar diupload langsung dengan R2 Bucket. 
+   - File divalidasi dengan AI Cloudflare.
+   - User secara otomatis tervalidasi sebelum image masuk ke bucket R2.
+   - File avatar lama di R2 dihapus otomatis setelah update berhasil.
+2. **`application/json`**: Hanya mengirimkan Field `{ "avatarUrl": "https://..." }` atau `null` (menghapus avatar). File lama di R2 akan dihapus otomatis jika URL diubah. Image juga akan otomatis terverifikasi via Cloudflare AI.
 
 ---
 
 ## Exports
 
-### Routes
+### Routes & Middleware
 
 ```typescript
 import { authRoutes, settingRoutes } from "@bambsdev/auth";
-```
-
-### Middleware
-
-```typescript
 import { dbMiddleware, customLogger, authMiddleware } from "@bambsdev/auth";
-```
-
-### DB Schema & Types
-
-```typescript
-import { schema, users, refreshTokens } from "@bambsdev/auth";
 import type { AuthBindings, AuthVariables, DB } from "@bambsdev/auth";
 import type { JWTAccessPayload, JWTRefreshPayload } from "@bambsdev/auth";
 ```
 
-### Utilities
+### Schema & Validation
 
 ```typescript
-import { ImageFilterService, parseBody } from "@bambsdev/auth";
-import { registerSchema, loginSchema, refreshSchema } from "@bambsdev/auth";
+import { schema, users, refreshTokens, passwordResets } from "@bambsdev/auth";
+
+// Zod schemas
+import { 
+  registerSchema, loginSchema, refreshSchema,
+  forgotPasswordSchema, resetPasswordSchema, parseBody 
+} from "@bambsdev/auth";
 ```
 
-### ImageFilterService
+### Services (Reusable untuk Consumer App)
 
-Utility untuk memfilter gambar (avatar, cover, dll) menggunakan Cloudflare AI:
+Kompilasi paket ini mengekspor service yang bisa digunakan kembali oleh consumer app:
 
+#### 1. ImageFilterService (Cloudflare Worker AI Image Filtering)
+Filter gambar mengandung unsur tak beradab / tak layak dengan AI:
 ```typescript
 import { ImageFilterService } from "@bambsdev/auth";
 
 const filter = new ImageFilterService(c.env.AI);
+// { allowed: false, reason: "NSFW content" }
+const result = await filter.isImageAllowed("https://example.com/image.jpg"); 
+```
 
-// Cek apakah gambar diizinkan
-const result = await filter.isImageAllowed("https://example.com/image.jpg");
-// → { allowed: true } atau { allowed: false, reason: "..." }
+#### 2. R2UploadService (R2 File Bucket Service)
+Kamu bisa menggunakan fungsi yang sama persis seperti Avatar Upload untuk resource lain misalnya Foto Produk / Thumbnail Artikel:
+```typescript
+import { R2UploadService, extractR2KeyFromUrl } from "@bambsdev/auth";
 
-// Filter otomatis — return URL jika lolos, null jika ditolak
-const url = await filter.filterImageUrl("https://example.com/image.jpg");
-// → "https://example.com/image.jpg" atau null
+const r2 = new R2UploadService(c.env.BUCKET, c.env.BUCKET_PUBLIC_URL);
+
+// Upload dari tipe arrayBuffer (biasanya parse form-data)
+const { key, url } = await r2.upload(buffer, "image/png", "products/thumbnails");
+
+// Menghapus data secara atomic by URL lama
+await r2.deleteByUrl(oldUrl, "/api/products/thumbnail-file/");
 ```
 
 ---
@@ -223,11 +269,11 @@ const url = await filter.filterImageUrl("https://example.com/image.jpg");
 - ✅ JWT access + refresh token rotation
 - ✅ Refresh token family tracking (deteksi reuse attack)
 - ✅ Access token blacklisting via KV
-- ✅ Rate limiting (login, resend verification, Google token)
+- ✅ Rate limiting (login, forget password, resend verification, Google token)
 - ✅ CSRF protection untuk Google OAuth (state parameter)
 - ✅ Password hashing (bcrypt-compatible)
-- ✅ Email verification flow
-- ✅ AI-powered image filtering (Cloudflare Workers AI)
+- ✅ Email verification flow & Password Reset
+- ✅ Cloudflare Workers AI integration for Image filtering
 - ✅ Audit logging via Analytics Engine
 
 ---

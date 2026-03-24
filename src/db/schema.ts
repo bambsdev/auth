@@ -64,6 +64,17 @@ export const emailVerifications = pgTable("email_verifications", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
 });
 
+export const passwordResets = pgTable("password_resets", {
+  id: uuid("id").primaryKey().defaultRandom(),
+  userId: uuid("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  tokenHash: text("token_hash").notNull().unique(), // SHA-256 dari plain token
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  usedAt: timestamp("used_at", { withTimezone: true }), // null = belum dipakai
+  createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
+});
+
 export const oauthAccounts = pgTable(
   "oauth_accounts",
   {

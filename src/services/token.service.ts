@@ -1,7 +1,7 @@
 // src/services/token.service.ts
 import { Client } from "pg";
 import { drizzle } from "drizzle-orm/node-postgres";
-import { lt } from "drizzle-orm";
+import { lt, or, isNotNull } from "drizzle-orm";
 import * as schema from "../db/schema";
 
 /**
@@ -23,6 +23,36 @@ export async function cleanupExpiredTokens(connectionString: string) {
     console.log(`[cron] Expired refresh tokens cleaned up. Rows affected: ${result.rowCount}`);
   } catch (error) {
     console.error("[cron] Error cleaning up expired tokens:", error);
+    throw error;
+  } finally {
+    await client.end().catch(() => {});
+  }
+}
+
+/**
+ * Hapus password reset token yang sudah expired atau sudah dipakai
+ */
+export async function cleanupExpiredPasswordResets(connectionString: string) {
+  const client = new Client({
+    connectionString,
+  });
+
+  try {
+    await client.connect();
+    const db = drizzle(client, { schema, logger: false });
+
+    const result = await db
+      .delete(schema.passwordResets)
+      .where(
+        or(
+          lt(schema.passwordResets.expiresAt, new Date()),
+          isNotNull(schema.passwordResets.usedAt),
+        ),
+      );
+
+    console.log(`[cron] Expired/used password resets cleaned up. Rows affected: ${result.rowCount}`);
+  } catch (error) {
+    console.error("[cron] Error cleaning up password resets:", error);
     throw error;
   } finally {
     await client.end().catch(() => {});

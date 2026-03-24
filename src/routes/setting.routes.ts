@@ -13,6 +13,7 @@ import { CacheService } from "../services/cache.service";
 import { AuthService } from "../services/auth.service";
 import { AuditService } from "../services/audit.service";
 import { SettingService } from "../services/setting.service";
+import { R2UploadService } from "../services/r2-upload.service";
 import { ImageFilterService } from "../utils/image-filter";
 import { authMiddleware } from "../middleware/auth.middleware";
 import {
@@ -192,73 +193,167 @@ settingRoutes.put("/password", async (c) => {
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  PUT /api/settings/avatar                   🔒 Protected     ║
 // ║  → AI filter sebelum menyimpan                               ║
+// ║                                                              ║
+// ║  Flow (multipart):                                           ║
+// ║  1. Validasi file (type, size)                               ║
+// ║  2. Cek user exists → ambil avatar lama                      ║
+// ║  3. AI image filter                                          ║
+// ║  4. Upload ke R2                                             ║
+// ║  5. Update DB (avatar_url)                                   ║
+// ║  6. Hapus file lama dari R2 (jika ada)                       ║
 // ╚══════════════════════════════════════════════════════════════╝
 settingRoutes.put("/avatar", async (c) => {
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json(
-      {
-        error: {
-          code: "INVALID_JSON",
-          message: "Request body bukan JSON valid",
-        },
-      },
-      400,
-    );
-  }
-
-  const { avatarUrl } = parseBody(updateAvatarSchema, body);
-  const { settingService, audit } = makeServices(c);
+  const { settingService, imageFilter, audit } = makeServices(c);
   const ip = getIp(c);
+  const userId = c.var.userId;
 
-  try {
-    const result = await settingService.updateAvatar(c.var.userId, avatarUrl);
+  const contentType = c.req.header("content-type") ?? "";
 
-    if (result.blocked) {
-      // Avatar di-block AI → pertahankan avatar lama, beri warning
+  // 1. Mode baru: Multipart Form Data
+  if (contentType.includes("multipart/form-data")) {
+    if (!c.env.BUCKET) {
+      return c.json(
+        { error: { code: "R2_NOT_CONFIGURED", message: "R2 bucket tidak dikonfigurasi" } },
+        500,
+      );
+    }
+
+    let formData: FormData;
+    try {
+      formData = await c.req.formData();
+    } catch {
+      return c.json(
+        { error: { code: "INVALID_FORM_DATA", message: "Form data tidak valid" } },
+        400,
+      );
+    }
+
+    const rawFile = formData.get("avatar");
+    if (!rawFile || typeof rawFile === "string") {
+      return c.json(
+        { error: { code: "MISSING_FILE", message: "File avatar wajib diisi" } },
+        400,
+      );
+    }
+    const file = rawFile as unknown as File;
+
+    // Validasi ukuran max 1MB
+    const MAX_SIZE = 1 * 1024 * 1024;
+    if (file.size > MAX_SIZE) {
+      return c.json(
+        { error: { code: "FILE_TOO_LARGE", message: "Ukuran file maksimal 1MB" } },
+        400,
+      );
+    }
+
+    // Validasi tipe file
+    const allowedTypes = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+    if (!allowedTypes.includes(file.type)) {
+      return c.json(
+        { error: { code: "INVALID_FILE_TYPE", message: "Format file harus JPEG, PNG, WebP, atau GIF" } },
+        400,
+      );
+    }
+
+    // ── STEP 2: Cek user exists SEBELUM upload ──────────────────────────
+    // Fix Bug #1: file tidak boleh masuk R2 jika user not found
+    let currentAvatarUrl: string | null;
+    try {
+      const userCheck = await settingService.checkUserExists(userId);
+      currentAvatarUrl = userCheck.avatarUrl;
+    } catch (err: any) {
+      return errorResponse(c, err);
+    }
+
+    const arrayBuffer = await file.arrayBuffer();
+
+    // ── STEP 3: AI image filter ─────────────────────────────────────────
+    const filterResult = await imageFilter.isImageBufferAllowed(arrayBuffer, file.type);
+    if (!filterResult.allowed) {
       audit.log({
         event: "avatar_blocked",
-        userId: c.var.userId,
+        userId,
         ip,
-        metadata: { reason: result.blockedReason },
+        metadata: { reason: filterResult.reason, source: "upload" },
       });
 
       return c.json(
         {
           error: {
             code: "AVATAR_BLOCKED",
-            message:
-              result.blockedReason ??
-              "Avatar mengandung konten yang tidak diizinkan. Avatar lama dipertahankan.",
-          },
-          data: {
-            id: result.id,
-            avatarUrl: result.avatarUrl,
-            updatedAt: result.updatedAt,
+            message: filterResult.reason ?? "Avatar mengandung konten yang tidak diizinkan",
           },
         },
         400,
       );
     }
 
-    audit.log({
-      event: "avatar_updated",
-      userId: c.var.userId,
-      ip,
-      metadata: { avatarUrl: result.avatarUrl },
-    });
+    // ── STEP 4: Upload ke R2 ────────────────────────────────────────────
+    const r2 = new R2UploadService(c.env.BUCKET, c.env.BUCKET_PUBLIC_URL);
+    const uploaded = await r2.upload(arrayBuffer, file.type, "auth/avatars");
 
-    return c.json({
-      message: "Avatar berhasil diperbarui",
-      data: {
-        id: result.id,
-        avatarUrl: result.avatarUrl,
-        updatedAt: result.updatedAt,
-      },
-    });
-  } catch (err: any) {
-    return errorResponse(c, err);
+    // ── STEP 5: Update DB ───────────────────────────────────────────────
+    try {
+      const { updated: result, oldAvatarUrl } = await settingService.updateAvatarUrl(userId, uploaded.url);
+
+      // ── STEP 6: Hapus file avatar lama dari R2 ────────────────────────
+      // Await secara eksplisit agar isolate tidak mati sebelum hapus selesai
+      const deletedKey = await r2.deleteByUrl(oldAvatarUrl);
+
+      audit.log({
+        event: "avatar_updated",
+        userId,
+        ip,
+        metadata: { avatarUrl: uploaded.url, source: "upload" },
+      });
+
+      return c.json({
+        message: "Avatar berhasil diperbarui",
+        data: {
+          id: result.id,
+          avatarUrl: result.avatarUrl,
+          updatedAt: result.updatedAt,
+        },
+      });
+    } catch (err: any) {
+      // Jika DB update gagal, hapus file yang baru diupload (rollback R2)
+      await r2.deleteByUrl(uploaded.url);
+      return errorResponse(c, err);
+    }
   }
+
+  // 2. Mode Lama: via URL (JSON) - DISABLED
+  return c.json(
+    {
+      error: {
+        code: "METHOD_NOT_ALLOWED",
+        message: "Update avatar via URL tidak lagi didukung. Silakan gunakan upload file.",
+      },
+    },
+    400,
+  );
+});
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  GET /api/settings/avatar-file/*             Proxy           ║
+// ╚══════════════════════════════════════════════════════════════╝
+settingRoutes.get("/avatar-file/*", async (c) => {
+  if (!c.env.BUCKET) {
+    return c.json({ error: { code: "NOT_FOUND", message: "File tidak ditemukan" } }, 404);
+  }
+
+  const key = c.req.path.replace("/api/settings/avatar-file/", "");
+  const object = await c.env.BUCKET.get(key);
+
+  if (!object) {
+    return c.json({ error: { code: "NOT_FOUND", message: "File tidak ditemukan" } }, 404);
+  }
+
+  // Set the response
+  const headers = new Headers();
+  headers.set("Content-Type", object.httpMetadata?.contentType ?? "image/jpeg");
+  headers.set("Cache-Control", "public, max-age=31536000"); // 1 year cache
+  if (object.etag) headers.set("ETag", object.etag);
+
+  return new Response(object.body, { headers });
 });

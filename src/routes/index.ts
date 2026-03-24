@@ -10,6 +10,8 @@
 //   DELETE /auth/sessions/:id
 //   GET  /auth/verify-email
 //   POST /auth/resend-verification
+//   POST /auth/forgot-password
+//   POST /auth/reset-password
 //   GET  /auth/google/login         (web: redirect ke Google consent)
 //   GET  /auth/google/callback      (web: handle callback dari Google)
 //   POST /auth/google/token         (mobile: verify ID token dari Google Sign-In SDK)
@@ -23,10 +25,14 @@ import { RegisterService } from "../services/register.service";
 import { AuditService } from "../services/audit.service";
 import { EmailService } from "../services/email.service";
 import { VerificationService } from "../services/verification.service";
+import { PasswordResetService } from "../services/password-reset.service";
 import { GoogleOAuthService } from "../services/google.service";
 import { ImageFilterService } from "../utils/image-filter";
 import { authMiddleware } from "../middleware/auth.middleware";
-import { RATE_LIMIT_MAX } from "../config/token.config";
+import {
+  RATE_LIMIT_MAX,
+  FORGOT_PASSWORD_RATE_LIMIT_MAX,
+} from "../config/token.config";
 import {
   parseBody,
   registerSchema,
@@ -34,6 +40,8 @@ import {
   refreshSchema,
   logoutSchema,
   resendVerificationSchema,
+  forgotPasswordSchema,
+  resetPasswordSchema,
   googleTokenSchema,
   clientTypeSchema,
 } from "../utils/validation";
@@ -60,8 +68,18 @@ function makeServices(c: AppContext) {
     c.env.JWT_REFRESH_SECRET,
   );
   const audit = new AuditService(c.env.ANALYTICS);
-  const emailService = new EmailService(c.env.RESEND_API_KEY, c.env.APP_URL);
+  const emailFrom =
+    c.var.emailConfig?.from ??
+    c.env.EMAIL_FROM ??
+    "No-Reply <noreply@example.com>";
+  const emailService = new EmailService(
+    c.env.RESEND_API_KEY,
+    c.env.APP_URL,
+    emailFrom,
+    c.var.emailConfig?.templates,
+  );
   const verificationService = new VerificationService(db);
+  const passwordResetService = new PasswordResetService(db);
   const imageFilter = new ImageFilterService(c.env.AI);
   const googleService = new GoogleOAuthService(
     db,
@@ -69,6 +87,7 @@ function makeServices(c: AppContext) {
     imageFilter,
     c.env.GOOGLE_CLIENT_ID,
     c.env.GOOGLE_CLIENT_SECRET,
+    c.env.BUCKET_PUBLIC_URL,
   );
   return {
     db,
@@ -77,6 +96,7 @@ function makeServices(c: AppContext) {
     audit,
     emailService,
     verificationService,
+    passwordResetService,
     googleService,
   };
 }
@@ -91,12 +111,19 @@ function getIp(c: AppContext): string {
 
 // ── Standarisasi response error ───────────────────────────────────────────────
 function errorResponse(c: AppContext, err: any) {
-  const isAppError = typeof err.status === "number" && typeof err.code === "string";
+  const isAppError =
+    typeof err.status === "number" && typeof err.code === "string";
   let status = isAppError ? err.status : 500;
   let code = isAppError ? err.code : "INTERNAL_ERROR";
   let message = isAppError ? err.message : "Terjadi kesalahan pada server";
 
-  if (!isAppError && (err.code === "23505" || String(err.message).includes("duplicate key") || String(err.message).includes("unique constraint") || String(err.message).includes("Failed query"))) {
+  if (
+    !isAppError &&
+    (err.code === "23505" ||
+      String(err.message).includes("duplicate key") ||
+      String(err.message).includes("unique constraint") ||
+      String(err.message).includes("Failed query"))
+  ) {
     status = 409;
     code = "CONFLICT";
     message = "Data sudah terdaftar atau terjadi duplikasi";
@@ -720,6 +747,127 @@ authRoutes.post("/google/token", async (c) => {
       ip,
       metadata: { reason: err.code ?? err.message, flow: "mobile" },
     });
+    return errorResponse(c, err);
+  }
+});
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  POST /auth/forgot-password                                  ║
+// ║  Rate-limited per email via Cache API                        ║
+// ╚══════════════════════════════════════════════════════════════╝
+authRoutes.post("/forgot-password", async (c) => {
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(
+      {
+        error: {
+          code: "INVALID_JSON",
+          message: "Request body bukan JSON valid",
+        },
+      },
+      400,
+    );
+  }
+
+  const { email } = parseBody(forgotPasswordSchema, body);
+
+  const { passwordResetService, emailService, cacheService, audit } =
+    makeServices(c);
+  const ip = getIp(c);
+
+  // Rate limit: max 3 request per email per 15 menit
+  const rateLimitKey = `forgot-password:${email}`;
+  const attempts = await cacheService.getRateLimit(rateLimitKey);
+  if (attempts >= FORGOT_PASSWORD_RATE_LIMIT_MAX) {
+    return c.json(
+      {
+        error: {
+          code: "RATE_LIMITED",
+          message:
+            "Terlalu banyak permintaan reset password. Coba lagi dalam 15 menit.",
+        },
+      },
+      429,
+    );
+  }
+
+  // Selalu increment rate limit (bahkan jika email tidak ditemukan)
+  await cacheService.incrementRateLimit(rateLimitKey);
+
+  // Cari user — jika tidak ditemukan, tetap return 200 (anti email enumeration)
+  const userId = await passwordResetService.findUserByEmail(email);
+
+  if (userId) {
+    try {
+      const token = await passwordResetService.createResetToken(userId);
+
+      // Kirim email non-blocking
+      c.executionCtx.waitUntil(
+        emailService
+          .sendForgotPasswordEmail(email, token)
+          .then(() =>
+            audit.log({
+              event: "forgot_password_requested",
+              userId,
+              ip,
+              metadata: { email },
+            }),
+          )
+          .catch((err: any) =>
+            console.error("[forgot-password] Email send failed:", err),
+          ),
+      );
+    } catch (err: any) {
+      console.error("[forgot-password] Error creating reset token:", err);
+    }
+  }
+
+  // Selalu return 200 — user tidak boleh tahu apakah email terdaftar atau tidak
+  return c.json({
+    message: "Jika email terdaftar, link reset password akan dikirim.",
+  });
+});
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  POST /auth/reset-password                                   ║
+// ║  Verify token → update password → revoke sessions            ║
+// ╚══════════════════════════════════════════════════════════════╝
+authRoutes.post("/reset-password", async (c) => {
+  let body: unknown;
+  try {
+    body = await c.req.json();
+  } catch {
+    return c.json(
+      {
+        error: {
+          code: "INVALID_JSON",
+          message: "Request body bukan JSON valid",
+        },
+      },
+      400,
+    );
+  }
+
+  const { token, newPassword } = parseBody(resetPasswordSchema, body);
+  const { passwordResetService, audit } = makeServices(c);
+  const ip = getIp(c);
+
+  try {
+    const result = await passwordResetService.resetPassword(token, newPassword);
+
+    audit.log({
+      event: "password_reset_success",
+      userId: result.userId,
+      ip,
+      metadata: { email: result.email },
+    });
+
+    return c.json({
+      message: "Password berhasil direset. Silakan login dengan password baru.",
+    });
+  } catch (err: any) {
     return errorResponse(c, err);
   }
 });

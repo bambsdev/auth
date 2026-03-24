@@ -11,29 +11,38 @@
 
 const BLOCKED_KEYWORDS = [
   // Wajah manusia / identitas wanita
-  "face",
-  "woman",
-  "women",
-  "girl",
-  "female",
-  "lady",
-  "queen",
-  "bride",
-  "groom",
   "wig",
   "lipstick",
   "bikini",
   "brassiere",
   "miniskirt",
   "maillot",
-  "velvet",
-  "bonnet",
-  "mask",
-  "head",
-  "person",
-  "people",
+  "swimming trunks",
+  "bathrobe",
+  "pajamas",
+  "sarong",
+  "breastplate",
+  "scuba diver",
+  "groom",
+  "gown",
+  "kimono",
+  "abaya",
+  "burqa",
   "hijab",
   "veil",
+  "bonnet",
+  "stole",
+  "cardigan",
+  "poncho",
+  "cloak",
+  "shawl",
+  "velvet",
+  "mask",
+  "sunglasses",
+  "necklace",
+  "bracelet",
+  "earring",
+  "person",
 
   // Hewan bermuka jelas (mamalia, primata, dll.)
   "dog",
@@ -139,38 +148,110 @@ export class ImageFilterService {
       }
 
       const imageBuffer = await response.arrayBuffer();
-      const imageArray = [...new Uint8Array(imageBuffer)];
+      const imageArray = new Uint8Array(imageBuffer);
 
-      // 2. Classify via resnet-50
-      const results = (await this.ai.run("@cf/microsoft/resnet-50", {
-        image: imageArray,
-      })) as { label: string; score: number }[];
+      // 2. Object Detection (Sangat Akurat untuk "Person" & "Animals")
+      try {
+        const detections = (await this.ai.run("@cf/facebook/detr-resnet-50" as any, {
+          image: Array.from(imageArray),
+        })) as { label: string; score: number }[];
 
-      if (!results || !Array.isArray(results)) {
-        // Jika AI gagal, izinkan (fail-open) — bisa diubah ke fail-close
-        console.warn("[image-filter] AI returned unexpected result:", results);
-        return { allowed: true };
-      }
+        if (detections && Array.isArray(detections)) {
+          // DEBUG: Log top results
+          console.log(`[image-filter] Object Detection Results:`, 
+            detections.slice(0, 3).map(d => `${d.label} (${(d.score * 100).toFixed(1)}%)`).join(", ")
+          );
 
-      // 3. Cek apakah ada label terlarang di atas threshold
-      for (const prediction of results) {
-        if (prediction.score < CONFIDENCE_THRESHOLD) continue;
-
-        const labelLower = prediction.label.toLowerCase();
-        for (const keyword of BLOCKED_KEYWORDS) {
-          if (labelLower.includes(keyword)) {
-            return {
-              allowed: false,
-              reason: `Terdeteksi konten terlarang: "${prediction.label}" (${(prediction.score * 100).toFixed(1)}%)`,
-            };
+          for (const det of detections) {
+            // Blokir manusia (person)
+            if (det.label === "person" && det.score > CONFIDENCE_THRESHOLD) {
+              return {
+                allowed: false,
+                reason: `Terdeteksi manusia (Person Detection) dengan skor ${(det.score * 100).toFixed(1)}%`,
+              };
+            }
+            
+            // Blokir hewan (optional but kept based on previous requirement)
+            const animals = ["dog", "cat", "bird", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe"];
+            if (animals.includes(det.label) && det.score > CONFIDENCE_THRESHOLD) {
+              return {
+                allowed: false,
+                reason: `Terdeteksi hewan (${det.label}) dengan skor ${(det.score * 100).toFixed(1)}%`,
+              };
+            }
           }
         }
+      } catch (detErr: any) {
+        // Cek Quota Exceeded (429)
+        if (detErr?.message?.includes("429") || detErr?.status === 429) {
+          console.warn("[image-filter] Quota exceeded (429), allowing image.");
+          return { allowed: true };
+        }
+        console.warn("[image-filter] Object detection failed:", detErr?.message ?? detErr);
       }
 
       return { allowed: true };
     } catch (err: any) {
       console.error("[image-filter] Error:", err?.message ?? err);
-      // Fail-open: jika terjadi error jaringan/AI, izinkan (bisa diubah ke fail-close)
+      // Fail-open
+      return { allowed: true };
+    }
+  }
+
+  /**
+   * Filter langsung dari ArrayBuffer
+   */
+  async isImageBufferAllowed(
+    buffer: ArrayBuffer,
+    contentType: string,
+  ): Promise<{ allowed: boolean; reason?: string }> {
+    try {
+      if (!contentType.startsWith("image/")) {
+        return { allowed: false, reason: "File bukan gambar yang valid" };
+      }
+
+      const imageArray = new Uint8Array(buffer);
+
+      // 2. Object Detection (Buffer)
+      try {
+        const detections = (await this.ai.run("@cf/facebook/detr-resnet-50" as any, {
+          image: Array.from(imageArray),
+        })) as { label: string; score: number }[];
+
+        if (detections && Array.isArray(detections)) {
+          // DEBUG: Log top results (Buffer)
+          console.log(`[image-filter] Object Detection Results (Buffer):`, 
+            detections.slice(0, 3).map(d => `${d.label} (${(d.score * 100).toFixed(1)}%)`).join(", ")
+          );
+
+          for (const det of detections) {
+            if (det.label === "person" && det.score > CONFIDENCE_THRESHOLD) {
+              return {
+                allowed: false,
+                reason: `Terdeteksi manusia (Person Detection) dengan skor ${(det.score * 100).toFixed(1)}%`,
+              };
+            }
+
+            const animals = ["dog", "cat", "bird", "horse", "sheep", "cow", "elephant", "bear", "zebra", "giraffe"];
+            if (animals.includes(det.label) && det.score > CONFIDENCE_THRESHOLD) {
+              return {
+                allowed: false,
+                reason: `Terdeteksi hewan (${det.label}) dengan skor ${(det.score * 100).toFixed(1)}%`,
+              };
+            }
+          }
+        }
+      } catch (detErr: any) {
+        if (detErr?.message?.includes("429") || detErr?.status === 429) {
+          console.warn("[image-filter] Quota exceeded (429 - Buffer), allowing image.");
+          return { allowed: true };
+        }
+        console.warn("[image-filter] Object detection failed (buffer):", detErr?.message ?? detErr);
+      }
+
+      return { allowed: true };
+    } catch (err: any) {
+      console.error("[image-filter] Buffer filter error:", err?.message ?? err);
       return { allowed: true };
     }
   }
