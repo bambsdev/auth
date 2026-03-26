@@ -16,7 +16,7 @@
 //   GET  /auth/google/callback      (web: handle callback dari Google)
 //   POST /auth/google/token         (mobile: verify ID token dari Google Sign-In SDK)
 
-import { Hono } from "hono";
+import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { verify } from "hono/jwt";
 import type { Context } from "hono";
 import { CacheService } from "../services/cache.service";
@@ -45,12 +45,27 @@ import {
   googleTokenSchema,
   clientTypeSchema,
 } from "../utils/validation";
+import { ErrorResponseSchema, TokenResponseSchema, BasicMessageSchema } from "../utils/openapi-schemas";
 import type { Bindings, Variables, JWTAccessPayload } from "../types/index";
 
-export const authRoutes = new Hono<{
+export const authRoutes = new OpenAPIHono<{
   Bindings: Bindings;
   Variables: Variables;
-}>();
+}>({
+  defaultHook: (result, c) => {
+    if (!result.success) {
+      return c.json(
+        {
+          error: {
+            code: "VALIDATION_ERROR",
+            message: result.error.issues[0]?.message || "Input tidak valid",
+          },
+        },
+        400,
+      );
+    }
+  },
+});
 
 // ── Types untuk Hono Context ─────────────────────────────────────────────────
 type AppContext = Context<{ Bindings: Bindings; Variables: Variables }>;
@@ -139,27 +154,52 @@ function errorResponse(c: AppContext, err: any) {
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  POST /auth/register                                         ║
 // ╚══════════════════════════════════════════════════════════════╝
-authRoutes.post("/register", async (c) => {
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json(
-      {
-        error: {
-          code: "INVALID_JSON",
-          message: "Request body bukan JSON valid",
+
+const registerRoute = createRoute({
+  method: "post",
+  path: "/register",
+  tags: ["Authentication"],
+  summary: "Daftar pengguna baru",
+  description: "Mendaftarkan pengguna baru dengan email dan kata sandi.",
+  request: {
+    body: {
+      content: { "application/json": { schema: registerSchema } },
+    },
+  },
+  responses: {
+    201: {
+      description: "Registrasi berhasil",
+      content: {
+        "application/json": {
+          schema: z.object({
+            message: z.string(),
+            data: z.object({
+              id: z.string(),
+              email: z.string(),
+              createdAt: z.string(),
+            }),
+          }),
         },
       },
-      400,
-    );
-  }
+    },
+    400: {
+      description: "Bad Request (Validation Error)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    409: {
+      description: "Conflict (Email sudah terdaftar)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
 
-  const validated = parseBody(registerSchema, body);
+authRoutes.openapi(registerRoute, async (c) => {
+  const validated = c.req.valid("json");
   const { db, audit, emailService, verificationService } = makeServices(c);
 
   try {
     const registerService = new RegisterService(db);
+    // TypeScript knows validated is RegisterInput
     const user = await registerService.register(validated);
 
     // Generate verification token & kirim email (tunggu hingga selesai)
@@ -181,7 +221,7 @@ authRoutes.post("/register", async (c) => {
     return c.json(
       {
         message: "Registrasi berhasil. Silakan cek email untuk verifikasi.",
-        data: { id: user.id, email: user.email, createdAt: user.createdAt },
+        data: { id: user.id, email: user.email, createdAt: (user.createdAt as Date).toISOString() },
       },
       201,
     );
@@ -193,23 +233,40 @@ authRoutes.post("/register", async (c) => {
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  POST /auth/login                                            ║
 // ╚══════════════════════════════════════════════════════════════╝
-authRoutes.post("/login", async (c) => {
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json(
-      {
-        error: {
-          code: "INVALID_JSON",
-          message: "Request body bukan JSON valid",
-        },
-      },
-      400,
-    );
-  }
 
-  const { email, password, clientType } = parseBody(loginSchema, body);
+const loginRoute = createRoute({
+  method: "post",
+  path: "/login",
+  tags: ["Authentication"],
+  summary: "User Login",
+  description: "Melakukan otentikasi dan mendapatkan token (Akses & Refresh)",
+  request: {
+    body: {
+      content: { "application/json": { schema: loginSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Login berhasil",
+      content: { "application/json": { schema: TokenResponseSchema } },
+    },
+    400: {
+      description: "Bad Request (Validation Error)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    401: {
+      description: "Unauthorized (Kredensial salah)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    429: {
+      description: "Too Many Requests (Rate Limited)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+authRoutes.openapi(loginRoute, async (c) => {
+  const { email, password, clientType } = c.req.valid("json");
   const { authService, cacheService, audit } = makeServices(c);
   const ip = getIp(c);
   const ua = c.req.header("User-Agent") ?? "";
@@ -239,18 +296,17 @@ authRoutes.post("/login", async (c) => {
     audit.log({ event: "login_success", clientType, ip, metadata: { email } });
 
     return c.json({
+      message: "Login berhasil",
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       expiresIn: tokens.expiresIn,
       tokenType: "Bearer",
-    });
+    }, 200);
   } catch (err: any) {
-    await cacheService.incrementRateLimit(ip);
-    audit.log({
-      event: "login_failed",
-      ip,
-      metadata: { email, reason: err.code },
-    });
+    if (err.status === 401 || err.code === "INVALID_CREDENTIALS") {
+      await cacheService.incrementRateLimit(ip);
+      audit.log({ event: "login_failed", ip, metadata: { email } });
+    }
     return errorResponse(c, err);
   }
 });
@@ -258,23 +314,40 @@ authRoutes.post("/login", async (c) => {
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  POST /auth/refresh                                          ║
 // ╚══════════════════════════════════════════════════════════════╝
-authRoutes.post("/refresh", async (c) => {
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json(
-      {
-        error: {
-          code: "INVALID_JSON",
-          message: "Request body bukan JSON valid",
-        },
-      },
-      400,
-    );
-  }
 
-  const { refreshToken } = parseBody(refreshSchema, body);
+const refreshRoute = createRoute({
+  method: "post",
+  path: "/refresh",
+  tags: ["Authentication"],
+  summary: "Refresh Token",
+  description: "Mendapatkan JWT Akses baru menggunakan Refresh Token yang valid",
+  request: {
+    body: {
+      content: { "application/json": { schema: refreshSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Token berhasil diperbarui",
+      content: { "application/json": { schema: TokenResponseSchema } },
+    },
+    400: {
+      description: "Bad Request (Validation Error)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    401: {
+      description: "Unauthorized (Refresh Token tidak valid/kadaluarsa)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    403: {
+      description: "Forbidden (Token reuse terdeteksi)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+authRoutes.openapi(refreshRoute, async (c) => {
+  const { refreshToken } = c.req.valid("json");
   const { authService, audit } = makeServices(c);
 
   try {
@@ -282,11 +355,12 @@ authRoutes.post("/refresh", async (c) => {
     audit.log({ event: "token_refresh", ip: getIp(c) });
 
     return c.json({
+      message: "Token berhasil diperbarui",
       accessToken: tokens.accessToken,
       refreshToken: tokens.refreshToken,
       expiresIn: tokens.expiresIn,
       tokenType: "Bearer",
-    });
+    }, 200);
   } catch (err: any) {
     if (err.code === "TOKEN_REUSE_DETECTED") {
       audit.log({ event: "token_reuse_detected", ip: getIp(c) });
@@ -298,15 +372,33 @@ authRoutes.post("/refresh", async (c) => {
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  POST /auth/logout                          🔒 Protected     ║
 // ╚══════════════════════════════════════════════════════════════╝
-authRoutes.post("/logout", authMiddleware, async (c) => {
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    body = {};
-  }
 
-  const { refreshToken } = parseBody(logoutSchema, body);
+const logoutRoute = createRoute({
+  method: "post",
+  path: "/logout",
+  tags: ["Authentication"],
+  summary: "User Logout",
+  description: "Mencabut refresh token saat ini",
+  security: [{ Bearer: [] }],
+  request: {
+    body: {
+      content: { "application/json": { schema: logoutSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Logout berhasil",
+      content: { "application/json": { schema: BasicMessageSchema } },
+    },
+    400: {
+      description: "Bad Request",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+authRoutes.openapi(logoutRoute, async (c) => {
+  const { refreshToken } = c.req.valid("json");
   const { authService, audit } = makeServices(c);
 
   // Ambil exp dari access token untuk set TTL blacklist
@@ -325,36 +417,117 @@ authRoutes.post("/logout", authMiddleware, async (c) => {
     ip: getIp(c),
   });
 
-  return c.json({ message: "Logout berhasil" });
+  return c.json({ message: "Logout berhasil" }, 200);
 });
 
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  POST /auth/logout-all                      🔒 Protected     ║
 // ╚══════════════════════════════════════════════════════════════╝
-authRoutes.post("/logout-all", authMiddleware, async (c) => {
+
+const logoutAllRoute = createRoute({
+  method: "post",
+  path: "/logout-all",
+  tags: ["Authentication"],
+  summary: "Logout All Sessions",
+  description: "Mencabut semua sesi / refresh token pengguna di semua perangkat",
+  security: [{ Bearer: [] }],
+  responses: {
+    200: {
+      description: "Logout semua sesi berhasil",
+      content: { "application/json": { schema: BasicMessageSchema } },
+    },
+  },
+});
+
+authRoutes.openapi(logoutAllRoute, async (c) => {
   const { authService, audit } = makeServices(c);
 
   await authService.logoutAll(c.var.userId);
   audit.log({ event: "logout_all", userId: c.var.userId, ip: getIp(c) });
 
-  return c.json({ message: "Semua sesi berhasil dicabut" });
+  return c.json({ message: "Semua sesi berhasil dicabut" }, 200);
 });
 
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  GET /auth/sessions                         🔒 Protected     ║
 // ╚══════════════════════════════════════════════════════════════╝
-authRoutes.get("/sessions", authMiddleware, async (c) => {
+
+const getSessionsRoute = createRoute({
+  method: "get",
+  path: "/sessions",
+  tags: ["Session Management"],
+  summary: "Get Active Sessions",
+  description: "Menampilkan daftar semua sesi perangkat (refresh token) yang aktif saat ini",
+  security: [{ Bearer: [] }],
+  responses: {
+    200: {
+      description: "Daftar sesi berhasil diambil",
+      content: {
+        "application/json": {
+          schema: z.object({
+            data: z.array(z.object({
+              id: z.string(),
+              createdAt: z.string().nullable(),
+              clientType: z.union([z.literal("web"), z.literal("mobile"), z.literal("desktop")]),
+              deviceInfo: z.any().nullable(),
+              expiresAt: z.string(),
+              lastUsedAt: z.string().nullable(),
+            })),
+          }),
+        },
+      },
+    },
+  },
+});
+
+authRoutes.openapi(getSessionsRoute, async (c) => {
   const { authService } = makeServices(c);
   const sessions = await authService.getSessions(c.var.userId);
 
-  return c.json({ data: sessions });
+  const formatted = sessions.map(s => ({
+    ...s,
+    createdAt: s.createdAt ? (s.createdAt as Date).toISOString() : null,
+    expiresAt: (s.expiresAt as Date).toISOString(),
+    lastUsedAt: s.lastUsedAt ? (s.lastUsedAt as Date).toISOString() : null,
+  }));
+
+  return c.json({ data: formatted }, 200);
 });
 
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  DELETE /auth/sessions/:id                  🔒 Protected     ║
 // ╚══════════════════════════════════════════════════════════════╝
-authRoutes.delete("/sessions/:id", authMiddleware, async (c) => {
-  const sessionId = c.req.param("id");
+
+const deleteSessionRoute = createRoute({
+  method: "delete",
+  path: "/sessions/{id}",
+  tags: ["Session Management"],
+  summary: "Revoke Specific Session",
+  description: "Mencabut sesi (refresh token) dari ID tertentu",
+  security: [{ Bearer: [] }],
+  request: {
+    params: z.object({
+      id: z.string().uuid("ID sesi harus UUID yang valid").openapi({
+        example: "a1b2c3d4-e5f6-7890-1234-567890abcdef",
+        description: "ID Refresh Token",
+      }),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Sesi berhasil dicabut",
+      content: { "application/json": { schema: BasicMessageSchema } },
+    },
+    404: {
+      description: "Sesi tidak ditemukan",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+authRoutes.openapi(deleteSessionRoute, async (c) => {
+  // Extract id normally from req.param (validated by z)
+  const { id: sessionId } = c.req.valid("param");
   const { authService, audit } = makeServices(c);
 
   const revoked = await authService.revokeSession(sessionId, c.var.userId);
@@ -374,27 +547,41 @@ authRoutes.delete("/sessions/:id", authMiddleware, async (c) => {
     ip: getIp(c),
     metadata: { sessionId },
   });
-  return c.json({ message: "Sesi berhasil dicabut" });
+  return c.json({ message: "Sesi berhasil dicabut" }, 200);
 });
 
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  GET /auth/verify-email?token=...                             ║
 // ╚══════════════════════════════════════════════════════════════╝
-authRoutes.get("/verify-email", async (c) => {
-  const token = c.req.query("token");
 
-  if (!token) {
-    return c.json(
-      {
-        error: {
-          code: "MISSING_TOKEN",
-          message: "Token verifikasi wajib diisi",
-        },
-      },
-      400,
-    );
-  }
+const verifyEmailRoute = createRoute({
+  method: "get",
+  path: "/verify-email",
+  tags: ["Authentication"],
+  summary: "Verify Email",
+  description: "Memverifikasi alamat email pengguna menggunakan token yang dikirim via email.",
+  request: {
+    query: z.object({
+      token: z.string().min(1, "Token verifikasi wajib diisi").openapi({
+        example: "abc123def456",
+        description: "Token verifikasi yang didapat dari email",
+      }),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Email berhasil diverifikasi",
+      content: { "application/json": { schema: BasicMessageSchema } },
+    },
+    400: {
+      description: "Token tidak valid atau missing",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
 
+authRoutes.openapi(verifyEmailRoute, async (c) => {
+  const { token } = c.req.valid("query");
   const { verificationService, audit } = makeServices(c);
 
   try {
@@ -409,7 +596,7 @@ authRoutes.get("/verify-email", async (c) => {
 
     return c.json({
       message: "Email berhasil diverifikasi. Silakan login.",
-    });
+    }, 200);
   } catch (err: any) {
     audit.log({
       event: "verification_failed",
@@ -423,26 +610,37 @@ authRoutes.get("/verify-email", async (c) => {
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  POST /auth/resend-verification                              ║
 // ╚══════════════════════════════════════════════════════════════╝
-authRoutes.post("/resend-verification", async (c) => {
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json(
-      {
-        error: {
-          code: "INVALID_JSON",
-          message: "Request body bukan JSON valid",
-        },
-      },
-      400,
-    );
-  }
 
-  const { email } = parseBody(resendVerificationSchema, body);
+const resendVerificationRoute = createRoute({
+  method: "post",
+  path: "/resend-verification",
+  tags: ["Authentication"],
+  summary: "Resend Verification",
+  description: "Mengirim ulang email verifikasi jika belum kadaluarsa. Rate-limited.",
+  request: {
+    body: {
+      content: { "application/json": { schema: resendVerificationSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Email berhasil dikirim ulang (atau email sudah diverifikasi)",
+      content: { "application/json": { schema: BasicMessageSchema } },
+    },
+    429: {
+      description: "Too Many Requests",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    400: {
+      description: "Validation Error",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
 
-  const { verificationService, emailService, cacheService, audit } =
-    makeServices(c);
+authRoutes.openapi(resendVerificationRoute, async (c) => {
+  const { email } = c.req.valid("json");
+  const { verificationService, emailService, cacheService, audit } = makeServices(c);
   const ip = getIp(c);
 
   // Rate limit: max 3 resend per email per 15 menit
@@ -461,8 +659,7 @@ authRoutes.post("/resend-verification", async (c) => {
   }
 
   try {
-    const { token, userId } =
-      await verificationService.resendVerification(email);
+    const { token, userId } = await verificationService.resendVerification(email);
 
     await cacheService.incrementRateLimit(rateLimitKey);
 
@@ -485,14 +682,14 @@ authRoutes.post("/resend-verification", async (c) => {
 
     return c.json({
       message: "Email verifikasi dikirim ulang. Silakan cek inbox Anda.",
-    });
+    }, 200);
   } catch (err: any) {
     // Untuk keamanan: jika user tidak ditemukan / sudah verified,
     // tetap return 200 yang sama (mencegah email enumeration)
     if (err.code === "USER_NOT_FOUND" || err.code === "ALREADY_VERIFIED") {
       return c.json({
         message: "Email verifikasi dikirim ulang. Silakan cek inbox Anda.",
-      });
+      }, 200);
     }
     return errorResponse(c, err);
   }
@@ -502,9 +699,28 @@ authRoutes.post("/resend-verification", async (c) => {
 // ║  GET /auth/google/login                                      ║
 // ║  Web flow: redirect ke Google consent screen                 ║
 // ╚══════════════════════════════════════════════════════════════╝
-authRoutes.get("/google/login", async (c) => {
-  const rawClientType = c.req.query("clientType");
-  const clientType = clientTypeSchema.safeParse(rawClientType).data ?? "web";
+
+const googleLoginRoute = createRoute({
+  method: "get",
+  path: "/google/login",
+  tags: ["Google OAuth"],
+  summary: "Google Login Redirect",
+  description: "Redirect pengguna ke halaman persetujuan Google (Web Flow).",
+  request: {
+    query: z.object({
+      clientType: clientTypeSchema.optional().openapi({ description: "Platform klien (web, mobile, desktop)" }),
+    }),
+  },
+  responses: {
+    302: {
+      description: "Redirect ke halaman otorisasi Google",
+    },
+  },
+});
+
+authRoutes.openapi(googleLoginRoute, async (c) => {
+  const querySchema = c.req.valid("query");
+  const clientType = querySchema.clientType ?? "web";
   const { googleService, cacheService } = makeServices(c);
 
   // Generate CSRF state token dan simpan di KV (TTL 10 menit)
@@ -528,10 +744,42 @@ authRoutes.get("/google/login", async (c) => {
 // ║  GET /auth/google/callback                                   ║
 // ║  Web flow: handle redirect dari Google                       ║
 // ╚══════════════════════════════════════════════════════════════╝
-authRoutes.get("/google/callback", async (c) => {
-  const code = c.req.query("code");
-  const state = c.req.query("state");
-  const error = c.req.query("error");
+
+const googleCallbackRoute = createRoute({
+  method: "get",
+  path: "/google/callback",
+  tags: ["Google OAuth"],
+  summary: "Google Callback",
+  description: "Menangani redirect setelah pengguna login via Google (Web Flow).",
+  request: {
+    query: z.object({
+      code: z.string().optional().openapi({ description: "Otorisasi code dari Google" }),
+      state: z.string().optional().openapi({ description: "CSRF state token" }),
+      error: z.string().optional().openapi({ description: "Pesan error jika user menolak" }),
+    }),
+  },
+  responses: {
+    200: {
+      description: "Login via Google berhasil",
+      content: {
+        "application/json": {
+          schema: TokenResponseSchema.extend({
+            message: z.string().openapi({ example: "Login via Google berhasil" }),
+            isNewUser: z.boolean().openapi({ description: "Benar jika ini adalah register pertama kalinya" }),
+            linked: z.boolean().openapi({ description: "Benar jika akun Google ditautkan ke akun email/password yang sudah ada" }),
+          }),
+        },
+      },
+    },
+    400: {
+      description: "Bad Request (Akses Ditolak, Missing Params, Invalid State)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+authRoutes.openapi(googleCallbackRoute, async (c) => {
+  const { code, state, error } = c.req.valid("query");
   const ip = getIp(c);
 
   const { googleService, cacheService, audit } = makeServices(c);
@@ -637,13 +885,14 @@ authRoutes.get("/google/callback", async (c) => {
 
     // Return JSON response dengan token
     return c.json({
+      message: "Login via Google berhasil",
       accessToken: result.accessToken,
       refreshToken: result.refreshToken,
       expiresIn: result.expiresIn,
       tokenType: "Bearer",
       isNewUser: result.isNewUser,
       linked: result.linked,
-    });
+    }, 200);
   } catch (err: any) {
     audit.log({
       event: "google_login_failed",
@@ -658,24 +907,44 @@ authRoutes.get("/google/callback", async (c) => {
 // ║  POST /auth/google/token                                     ║
 // ║  Mobile flow: verify Google ID token dari Sign-In SDK        ║
 // ╚══════════════════════════════════════════════════════════════╝
-authRoutes.post("/google/token", async (c) => {
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json(
-      {
-        error: {
-          code: "INVALID_JSON",
-          message: "Request body bukan JSON valid",
+
+const googleTokenRoute = createRoute({
+  method: "post",
+  path: "/google/token",
+  tags: ["Google OAuth"],
+  summary: "Google SDK ID Token Validation",
+  description: "Memverifikasi token Google OAuth secara independen dari SDK Native (Mobile Flow).",
+  request: {
+    body: {
+      content: { "application/json": { schema: googleTokenSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Login via Google ID Token berhasil",
+      content: {
+        "application/json": {
+          schema: TokenResponseSchema.extend({
+            message: z.string().openapi({ example: "Login via Google ID Token berhasil" }),
+            isNewUser: z.boolean().openapi({ description: "Benar jika ini adalah register pertama kalinya" }),
+            linked: z.boolean().openapi({ description: "Benar jika akun Google ditautkan ke akun yang sudah ada" }),
+          }),
         },
       },
-      400,
-    );
-  }
+    },
+    400: {
+      description: "Bad Request (Token tidak valid)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    429: {
+      description: "Too Many Requests (Rate Limited)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
 
-  const { idToken, clientType } = parseBody(googleTokenSchema, body);
-
+authRoutes.openapi(googleTokenRoute, async (c) => {
+  const { idToken, clientType } = c.req.valid("json");
   const { googleService, cacheService, audit } = makeServices(c);
   const ip = getIp(c);
   const ua = c.req.header("User-Agent") ?? "";
@@ -733,13 +1002,14 @@ authRoutes.post("/google/token", async (c) => {
     }
 
     return c.json({
+      message: "Login via Google ID Token berhasil",
       accessToken: result.accessToken,
       refreshToken: result.refreshToken,
       expiresIn: result.expiresIn,
       tokenType: "Bearer",
       isNewUser: result.isNewUser,
       linked: result.linked,
-    });
+    }, 200);
   } catch (err: any) {
     await cacheService.incrementRateLimit(rateLimitKey);
     audit.log({
@@ -755,26 +1025,37 @@ authRoutes.post("/google/token", async (c) => {
 // ║  POST /auth/forgot-password                                  ║
 // ║  Rate-limited per email via Cache API                        ║
 // ╚══════════════════════════════════════════════════════════════╝
-authRoutes.post("/forgot-password", async (c) => {
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json(
-      {
-        error: {
-          code: "INVALID_JSON",
-          message: "Request body bukan JSON valid",
-        },
-      },
-      400,
-    );
-  }
 
-  const { email } = parseBody(forgotPasswordSchema, body);
+const forgotPasswordRoute = createRoute({
+  method: "post",
+  path: "/forgot-password",
+  tags: ["Authentication"],
+  summary: "Forgot Password",
+  description: "Meminta link reset password dikirimkan ke email",
+  request: {
+    body: {
+      content: { "application/json": { schema: forgotPasswordSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Permintaan reset password diterima",
+      content: { "application/json": { schema: BasicMessageSchema } },
+    },
+    429: {
+      description: "Too Many Requests",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    400: {
+      description: "Validation Error",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
 
-  const { passwordResetService, emailService, cacheService, audit } =
-    makeServices(c);
+authRoutes.openapi(forgotPasswordRoute, async (c) => {
+  const { email } = c.req.valid("json");
+  const { passwordResetService, emailService, cacheService, audit } = makeServices(c);
   const ip = getIp(c);
 
   // Rate limit: max 3 request per email per 15 menit
@@ -785,8 +1066,7 @@ authRoutes.post("/forgot-password", async (c) => {
       {
         error: {
           code: "RATE_LIMITED",
-          message:
-            "Terlalu banyak permintaan reset password. Coba lagi dalam 15 menit.",
+          message: "Terlalu banyak permintaan reset password. Coba lagi dalam 15 menit.",
         },
       },
       429,
@@ -827,30 +1107,39 @@ authRoutes.post("/forgot-password", async (c) => {
   // Selalu return 200 — user tidak boleh tahu apakah email terdaftar atau tidak
   return c.json({
     message: "Jika email terdaftar, link reset password akan dikirim.",
-  });
+  }, 200);
 });
 
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  POST /auth/reset-password                                   ║
 // ║  Verify token → update password → revoke sessions            ║
 // ╚══════════════════════════════════════════════════════════════╝
-authRoutes.post("/reset-password", async (c) => {
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json(
-      {
-        error: {
-          code: "INVALID_JSON",
-          message: "Request body bukan JSON valid",
-        },
-      },
-      400,
-    );
-  }
 
-  const { token, newPassword } = parseBody(resetPasswordSchema, body);
+const resetPasswordRoute = createRoute({
+  method: "post",
+  path: "/reset-password",
+  tags: ["Authentication"],
+  summary: "Reset Password",
+  description: "Mengganti password menggunakan token reset password yang dikirim via email",
+  request: {
+    body: {
+      content: { "application/json": { schema: resetPasswordSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Password berhasil direset",
+      content: { "application/json": { schema: BasicMessageSchema } },
+    },
+    400: {
+      description: "Bad Request (Token tidak valid/Expired)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+authRoutes.openapi(resetPasswordRoute, async (c) => {
+  const { token, newPassword } = c.req.valid("json");
   const { passwordResetService, audit } = makeServices(c);
   const ip = getIp(c);
 
@@ -866,7 +1155,7 @@ authRoutes.post("/reset-password", async (c) => {
 
     return c.json({
       message: "Password berhasil direset. Silakan login dengan password baru.",
-    });
+    }, 200);
   } catch (err: any) {
     return errorResponse(c, err);
   }

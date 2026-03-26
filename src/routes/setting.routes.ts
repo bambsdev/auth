@@ -6,7 +6,7 @@
 //   PUT  /api/settings/password  — change password (force re-login)
 //   PUT  /api/settings/avatar    — update avatar URL (AI filtered)
 
-import { Hono } from "hono";
+import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { verify } from "hono/jwt";
 import type { Context } from "hono";
 import { CacheService } from "../services/cache.service";
@@ -22,12 +22,27 @@ import {
   changePasswordSchema,
   updateAvatarSchema,
 } from "../utils/validation";
+import { ErrorResponseSchema, TokenResponseSchema, BasicMessageSchema } from "../utils/openapi-schemas";
 import type { Bindings, Variables, JWTAccessPayload } from "../types/index";
 
-export const settingRoutes = new Hono<{
+export const settingRoutes = new OpenAPIHono<{
   Bindings: Bindings;
   Variables: Variables;
-}>();
+}>({
+  defaultHook: (result, c) => {
+    if (!result.success) {
+      return c.json(
+        {
+          error: {
+            code: "VALIDATION_ERROR",
+            message: result.error.issues[0]?.message || "Input tidak valid",
+          },
+        },
+        400,
+      );
+    }
+  },
+});
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 type AppContext = Context<{ Bindings: Bindings; Variables: Variables }>;
@@ -68,12 +83,53 @@ settingRoutes.use("*", authMiddleware);
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  GET /api/settings/profile                  🔒 Protected     ║
 // ╚══════════════════════════════════════════════════════════════╝
-settingRoutes.get("/profile", async (c) => {
+
+const getProfileRoute = createRoute({
+  method: "get",
+  path: "/profile",
+  tags: ["Settings"],
+  summary: "Get My Profile",
+  description: "Mengambil data profil pengguna yang sedang login.",
+  security: [{ Bearer: [] }],
+  responses: {
+    200: {
+      description: "Profil berhasil diambil",
+      content: {
+        "application/json": {
+          schema: z.object({
+            data: z.object({
+              id: z.string(),
+              email: z.string(),
+              username: z.string().nullable(),
+              fullName: z.string().nullable(),
+              avatarUrl: z.string().nullable(),
+              isEmailVerified: z.boolean().nullable(),
+              hasPassword: z.boolean(),
+              createdAt: z.string(),
+              updatedAt: z.string().nullable(),
+            }),
+          }),
+        },
+      },
+    },
+    401: {
+      description: "Unauthorized",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+settingRoutes.openapi(getProfileRoute, async (c) => {
   const { settingService } = makeServices(c);
 
   try {
     const profile = await settingService.getProfile(c.var.userId);
-    return c.json({ data: profile });
+    // Profile type normalization for JSON serialization if needed
+    return c.json({ data: {
+      ...profile,
+      createdAt: (profile.createdAt as Date).toISOString(),
+      updatedAt: profile.updatedAt ? (profile.updatedAt as Date).toISOString() : null,
+    } }, 200);
   } catch (err: any) {
     return errorResponse(c, err);
   }
@@ -82,23 +138,44 @@ settingRoutes.get("/profile", async (c) => {
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  PUT /api/settings/profile                  🔒 Protected     ║
 // ╚══════════════════════════════════════════════════════════════╝
-settingRoutes.put("/profile", async (c) => {
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json(
-      {
-        error: {
-          code: "INVALID_JSON",
-          message: "Request body bukan JSON valid",
+
+const updateProfileRoute = createRoute({
+  method: "put",
+  path: "/profile",
+  tags: ["Settings"],
+  summary: "Update Profile",
+  description: "Memperbarui data username atau nama lengkap.",
+  security: [{ Bearer: [] }],
+  request: {
+    body: {
+      content: { "application/json": { schema: updateProfileSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Profil berhasil diperbarui",
+      content: {
+        "application/json": {
+          schema: z.object({
+            message: z.string(),
+            data: z.object({
+              id: z.string(),
+              username: z.string().nullable(),
+              fullName: z.string().nullable(),
+            }),
+          }),
         },
       },
-      400,
-    );
-  }
+    },
+    400: {
+      description: "Bad Request (Validation Error)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
 
-  const validated = parseBody(updateProfileSchema, body);
+settingRoutes.openapi(updateProfileRoute, async (c) => {
+  const validated = c.req.valid("json");
   const { settingService, audit } = makeServices(c);
 
   try {
@@ -117,7 +194,7 @@ settingRoutes.put("/profile", async (c) => {
     return c.json({
       message: "Profil berhasil diperbarui",
       data: updated,
-    });
+    }, 200);
   } catch (err: any) {
     return errorResponse(c, err);
   }
@@ -127,26 +204,39 @@ settingRoutes.put("/profile", async (c) => {
 // ║  PUT /api/settings/password                 🔒 Protected     ║
 // ║  → Revoke semua sesi, return token pair baru                ║
 // ╚══════════════════════════════════════════════════════════════╝
-settingRoutes.put("/password", async (c) => {
-  let body: unknown;
-  try {
-    body = await c.req.json();
-  } catch {
-    return c.json(
-      {
-        error: {
-          code: "INVALID_JSON",
-          message: "Request body bukan JSON valid",
+
+const changePasswordRoute = createRoute({
+  method: "put",
+  path: "/password",
+  tags: ["Settings"],
+  summary: "Change Password",
+  description: "Mengubah kata sandi pengguna saat ini. Mengeluarkan semua sesi di perangkat lain.",
+  security: [{ Bearer: [] }],
+  request: {
+    body: {
+      content: { "application/json": { schema: changePasswordSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Password berhasil diubah",
+      content: {
+        "application/json": {
+          schema: TokenResponseSchema.extend({
+            message: z.string(),
+          }),
         },
       },
-      400,
-    );
-  }
+    },
+    400: {
+      description: "Bad Request (Password salah / Validation Error)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
 
-  const { currentPassword, newPassword, clientType } = parseBody(
-    changePasswordSchema,
-    body,
-  );
+settingRoutes.openapi(changePasswordRoute, async (c) => {
+  const { currentPassword, newPassword, clientType } = c.req.valid("json");
   const { settingService, cacheService, audit } = makeServices(c);
   const ip = getIp(c);
   const ua = c.req.header("User-Agent") ?? "";
@@ -184,7 +274,7 @@ settingRoutes.put("/password", async (c) => {
       refreshToken: tokens.refreshToken,
       expiresIn: tokens.expiresIn,
       tokenType: "Bearer",
-    });
+    }, 200);
   } catch (err: any) {
     return errorResponse(c, err);
   }
@@ -193,16 +283,55 @@ settingRoutes.put("/password", async (c) => {
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  PUT /api/settings/avatar                   🔒 Protected     ║
 // ║  → AI filter sebelum menyimpan                               ║
-// ║                                                              ║
-// ║  Flow (multipart):                                           ║
-// ║  1. Validasi file (type, size)                               ║
-// ║  2. Cek user exists → ambil avatar lama                      ║
-// ║  3. AI image filter                                          ║
-// ║  4. Upload ke R2                                             ║
-// ║  5. Update DB (avatar_url)                                   ║
-// ║  6. Hapus file lama dari R2 (jika ada)                       ║
+// ║  Flow (multipart): Validasi -> Cek -> AI -> R2 -> DB -> Hapus║
 // ╚══════════════════════════════════════════════════════════════╝
-settingRoutes.put("/avatar", async (c) => {
+
+const avatarRoute = createRoute({
+  method: "put",
+  path: "/avatar",
+  tags: ["Settings"],
+  summary: "Upload Avatar",
+  description: "Mengunggah avatar baru untuk pengguna. Terintegrasi dengan image filter AI dan Cloudflare R2 secara atomik.",
+  security: [{ Bearer: [] }],
+  request: {
+    body: {
+      content: { 
+        "multipart/form-data": {
+          schema: z.object({
+            avatar: z.any().openapi({ type: "string", format: "binary", description: "File gambar (JPEG, PNG, WebP, GIF)" }),
+          }),
+        },
+      },
+    },
+  },
+  responses: {
+    200: {
+      description: "Avatar berhasil diperbarui",
+      content: {
+        "application/json": {
+          schema: z.object({
+            message: z.string(),
+            data: z.object({
+              id: z.string(),
+              avatarUrl: z.string().nullable(),
+              updatedAt: z.string(),
+            }),
+          }),
+        },
+      },
+    },
+    400: {
+      description: "Bad Request (Tipe tidak valid, Terlalu besar, diblokir AI)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    500: {
+      description: "Internal Server Error (R2 tidak dikonfigurasi, dll)",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+settingRoutes.openapi(avatarRoute, async (c) => {
   const { settingService, imageFilter, audit } = makeServices(c);
   const ip = getIp(c);
   const userId = c.var.userId;
@@ -298,7 +427,9 @@ settingRoutes.put("/avatar", async (c) => {
 
       // ── STEP 6: Hapus file avatar lama dari R2 ────────────────────────
       // Await secara eksplisit agar isolate tidak mati sebelum hapus selesai
-      const deletedKey = await r2.deleteByUrl(oldAvatarUrl);
+      if (oldAvatarUrl) {
+        await r2.deleteByUrl(oldAvatarUrl);
+      }
 
       audit.log({
         event: "avatar_updated",
@@ -312,9 +443,9 @@ settingRoutes.put("/avatar", async (c) => {
         data: {
           id: result.id,
           avatarUrl: result.avatarUrl,
-          updatedAt: result.updatedAt,
+          updatedAt: (result.updatedAt as Date).toISOString(),
         },
-      });
+      }, 200);
     } catch (err: any) {
       // Jika DB update gagal, hapus file yang baru diupload (rollback R2)
       await r2.deleteByUrl(uploaded.url);
@@ -337,7 +468,25 @@ settingRoutes.put("/avatar", async (c) => {
 // ╔══════════════════════════════════════════════════════════════╗
 // ║  GET /api/settings/avatar-file/*             Proxy           ║
 // ╚══════════════════════════════════════════════════════════════╝
-settingRoutes.get("/avatar-file/*", async (c) => {
+
+const getAvatarFileRoute = createRoute({
+  method: "get",
+  path: "/avatar-file/{path*}",
+  tags: ["Settings"],
+  summary: "Get Avatar File (Proxy)",
+  description: "Melakukan proxy ke bucket Cloudflare R2 jika pengguna tidak bisa mengakses public read CNAME.",
+  responses: {
+    200: {
+      description: "Gambar Avatar",
+    },
+    404: {
+      description: "File tidak ditemukan / Error",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+settingRoutes.openapi(getAvatarFileRoute, async (c) => {
   if (!c.env.BUCKET) {
     return c.json({ error: { code: "NOT_FOUND", message: "File tidak ditemukan" } }, 404);
   }
