@@ -8,56 +8,70 @@
 
 ## 🏗 Architecture & Tech Stack
 
-Built on a **Clean Service Layer Architecture**, ensuring logic is separated from routing and infrastructure.
+This package is built on a **Clean Service Layer Architecture**. Business logic is strictly separated from routing and infrastructure, making it highly testable and maintainable.
 
-- **Framework**: [Hono](https://hono.dev) (using `OpenAPIHono`)
+### Core Technologies
+
+- **Framework**: [Hono](https://hono.dev) (specifically utilizing `OpenAPIHono` for auto-documentation)
 - **Runtime**: [Cloudflare Workers](https://workers.cloudflare.com/)
-- **Database**: PostgreSQL (via [Cloudflare Hyperdrive](https://developers.cloudflare.com/hyperdrive/))
+- **Database**: PostgreSQL (connected via [Cloudflare Hyperdrive](https://developers.cloudflare.com/hyperdrive/) for connection pooling)
 - **ORM**: [Drizzle ORM](https://orm.drizzle.team/)
-- **Storage**: Cloudflare R2 (Profiles & Avatars)
-- **Caching/Rate Limit**: Cloudflare KV & Workers Cache API
-- **AI**: Cloudflare Workers AI (`detr-resnet-50` for image safety)
-- **Monitoring**: Cloudflare Analytics Engine (Audit Logging)
-- **Documentation**: `@hono/zod-openapi` (Swagger UI ready)
+- **Storage**: Cloudflare R2 (for Profiles & Avatar management)
+- **State & Caching**: Cloudflare KV (for OAuth state, token blacklisting, and rate limiting)
+- **AI Integration**: Cloudflare Workers AI (utilizing `detr-resnet-50` for automated image safety filtering)
+- **Observability**: Cloudflare Analytics Engine (for standard Audit Logging)
 
 ---
 
-## ✨ Features
+## ✨ Key Features
 
-- **Standard Auth**: Register, Login, Email Verification, and Password Reset.
+### 🛡️ Core Authentication
+
+- **Standard Flows**: Register, Login, Email Verification, and Password Reset.
 - **Advanced Session Management**:
-  - JWT Access + Refresh token rotation.
-  - Refresh token family tracking (detects reuse/stolen tokens).
-  - List and revoke specific active sessions or "Logout all".
-- **Google OAuth**:
-  - **Web Flow**: Standard redirect-based auth.
-  - **Mobile Flow**: Direct ID Token verification for Native SDKs.
-  - **Account Linking**: Automatically links Google accounts to existing email registrations.
-- **User Settings & Profiles**:
-  - Update user metadata and change passwords.
-  - **Transactional Avatar Upload**: Atomic process involving AI-filtering, R2 upload, DB update, and old file cleanup—all while bypassing Hyperdrive's cache for consistency.
-- **Developer Experience**:
-  - **Auto-Swagger**: Built-in OpenAPI specification generation.
-  - **Clean Logger**: Human-readable audit trail.
-  - **Drop-in Middleware**: Easy DB and Context injection.
+  - JWT Access tokens combined with secure Refresh token rotation.
+  - Refresh token family tracking (automatically detects and revokes reused/stolen tokens).
+  - Ability to list active sessions, revoke specific sessions, or execute a global "Logout all device" command.
+
+### 🌐 Google OAuth Integration
+
+- **Web Flow**: Standard redirect-based authentication.
+- **Mobile Flow**: Direct Google ID Token validation tailored for Native SDKs (Android/iOS).
+- **Smart Account Linking**: Automatically links new Google logins to existing email/password registrations.
+
+### 👤 User Settings & Profiles
+
+- **Profile Management**: Update user metadata securely.
+- **Avatar Uploads (R2 + AI)**:
+  - **Transactional Safety**: Atomic process involving AI-filtering, Cloudflare R2 upload, Database URI update, and old file cleanup. All while intelligently bypassing Hyperdrive's cache layer to ensure absolute data consistency.
+
+### 🛠️ Developer Experience (DX)
+
+- **Auto-Swagger**: Built-in OpenAPI specification generation out of the box.
+- **Clean Logger**: Beautiful, human-readable audit trails for development and production.
+- **Drop-in Middlewares**: Effortless Database and Context injection for consumer applications.
 
 ---
 
-## 🚀 Installation
+## 🚀 Installation & Setup
+
+### 1. Install the Package
 
 ```bash
 bun add @bambsdev/auth
 ```
 
-## Peer Dependencies
+### 2. Peer Dependencies
 
-Package ini membutuhkan dependensi berikut di consumer app:
+This package requires the following dependencies in your consumer application:
 
 ```bash
-bun add hono drizzle-orm pg zod
+bun add hono @hono/zod-openapi drizzle-orm pg zod
 ```
 
-## Quick Start
+### 3. Quick Start (Hono App)
+
+Mounting the authentication system is incredibly straightforward:
 
 ```typescript
 import { Hono } from "hono";
@@ -71,27 +85,27 @@ import type { AuthBindings, AuthVariables } from "@bambsdev/auth";
 
 const app = new Hono<{ Bindings: AuthBindings; Variables: AuthVariables }>();
 
-// Logger — format: [ISO_TIMESTAMP] METHOD /path - STATUS (TIMINGms) IP:xxx
+// Logger — Format: [ISO_TIMESTAMP] METHOD /path - STATUS (TIMINGms) IP:xxx
 app.use("*", customLogger());
 
-// DB Middleware — inject Drizzle instance ke setiap request
+// DB Middleware — Injects the Drizzle DB instance into every request
 app.use("/auth/*", dbMiddleware);
 app.use("/api/*", dbMiddleware);
 
-// Mount auth routes
+// Mount the routes
 app.route("/auth", authRoutes);
 app.route("/api/settings", settingRoutes);
 
 export default app;
 ```
 
-Itu saja. Semua endpoint auth langsung tersedia. ✅
+_That's it! All secure authentication endpoints are instantly available._ ✅
 
 ---
 
-## Cloudflare Bindings (wrangler.toml)
+## ⚙️ Configuration (Wrangler Bindings)
 
-Library ini membaca konfigurasi dari `c.env` secara otomatis. Consumer app wajib mendefinisikan binding berikut di `wrangler.toml`:
+The library automatically reads configuration from Hono's `c.env`. The consumer application **must** define the following bindings in its `wrangler.toml`:
 
 ```toml
 name = "my-app"
@@ -99,9 +113,12 @@ main = "src/index.ts"
 compatibility_date = "2024-12-01"
 
 [vars]
-APP_URL = "https://myapp.com"
+BUCKET_PUBLIC_URL = "https://xxx.r2.dev" # Ganti dengan URL public R2 milikmu
+EMAIL_FROM = "No reply <noreply@xxxxx.com>"
 
-# Secrets (set via `wrangler secret put`)
+
+
+# Secrets (Set these via `wrangler secret put`)
 # JWT_SECRET
 # JWT_REFRESH_SECRET
 # RESEND_API_KEY
@@ -112,9 +129,17 @@ APP_URL = "https://myapp.com"
 binding = "HYPERDRIVE"
 id = "your-hyperdrive-id"
 
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "your-bucket-name"
+
 [[kv_namespaces]]
 binding = "KV"
 id = "your-kv-id"
+
+[observability.logs]
+enabled = false
+invocation_logs = true
 
 [[analytics_engine_datasets]]
 binding = "ANALYTICS"
@@ -123,9 +148,9 @@ binding = "ANALYTICS"
 binding = "AI"
 ```
 
-### Environment Secrets
+### Setting up Environment Secrets
 
-Set via CLI:
+Run these commands in your CLI to set the required secrets:
 
 ```bash
 wrangler secret put JWT_SECRET
@@ -137,18 +162,19 @@ wrangler secret put GOOGLE_CLIENT_SECRET
 
 ---
 
-## Database Schema (Drizzle Migrations)
+## 🗄️ Database Schema & Migrations
 
-Library ini meng-export Drizzle schema yang siap pakai. Untuk menjalankan migrasi di consumer app:
+This library exports a ready-to-use Drizzle schema. To run migrations in your consumer app, update your `drizzle.config.ts`:
 
 ```typescript
 // drizzle.config.ts
 import { defineConfig } from "drizzle-kit";
 
 export default defineConfig({
-  schema: "./node_modules/@bambsdev/auth/dist/index.js",
-  // atau import langsung:
-  // schema: "./src/db/schema.ts" (jika kamu re-export)
+  schema: [
+    "./node_modules/@bambsdev/auth/dist/index.js", // Auth schemas
+    "./src/db/schema.ts", // Your local app schemas
+  ],
   out: "./drizzle",
   dialect: "postgresql",
   dbCredentials: {
@@ -157,120 +183,126 @@ export default defineConfig({
 });
 ```
 
-Atau re-export schema di project-mu:
+### Provided Tables
 
-```typescript
-// src/db/schema.ts (di consumer app)
-export * from "@bambsdev/auth"; // re-export semua auth tables
-// Tambahkan table khusus app-mu di sini
-```
-
-### Tables yang tersedia:
-
-| Table                | Deskripsi                        |
-| -------------------- | -------------------------------- |
-| `users`              | Data user (email, password, dll) |
-| `refreshTokens`      | Refresh token per device/session |
-| `emailVerifications` | Token verifikasi email           |
-| `oauthAccounts`      | Akun OAuth terhubung (Google)    |
+| Table Name           | Description                                                         |
+| :------------------- | :------------------------------------------------------------------ |
+| `users`              | Primary user data (email, password hash, metadata, etc.)            |
+| `refreshTokens`      | Tracks active refresh tokens per device/session                     |
+| `emailVerifications` | Stores tokens for email verification workflows                      |
+| `oauthAccounts`      | Links third-party accounts (e.g., Google) to the main `users` table |
 
 ---
 
-## Auth Endpoints
+## 🗺️ API Reference
 
-Setelah di-mount ke `/auth`, endpoint berikut tersedia:
+### Auth Endpoints (`/auth`)
 
-| Method   | Path                        | Auth   | Deskripsi                        |
-| -------- | --------------------------- | ------ | -------------------------------- |
-| `POST`   | `/auth/register`            | Public | Registrasi user baru             |
-| `POST`   | `/auth/login`               | Public | Login dengan email & password    |
-| `POST`   | `/auth/refresh`             | Public | Rotate refresh token             |
-| `POST`   | `/auth/logout`              | 🔒     | Logout (revoke current session)  |
-| `POST`   | `/auth/logout-all`          | 🔒     | Logout dari semua device         |
-| `GET`    | `/auth/sessions`            | 🔒     | Lihat semua sesi aktif           |
-| `DELETE` | `/auth/sessions/:id`        | 🔒     | Revoke sesi tertentu             |
-| `GET`    | `/auth/verify-email`        | Public | Verifikasi email via token       |
-| `POST`   | `/auth/resend-verification` | Public | Kirim ulang email verifikasi     |
-| `GET`    | `/auth/google/login`        | Public | Redirect ke Google consent (web) |
-| `GET`    | `/auth/google/callback`     | Public | Handle callback dari Google      |
-| `POST`   | `/auth/google/token`        | Public | Verify Google ID token (mobile)  |
+These routes handle all core authentication flows.
 
-## Settings Endpoints
+| Method   | Path                        | Access     | Description                                           |
+| :------- | :-------------------------- | :--------- | :---------------------------------------------------- |
+| `POST`   | `/auth/register`            | Public     | Register a new user account                           |
+| `POST`   | `/auth/login`               | Public     | Login via email & password                            |
+| `POST`   | `/auth/refresh`             | Public     | Rotate refresh token to get a new access token        |
+| `POST`   | `/auth/logout`              | 🔒 Private | Logout (revokes the current session)                  |
+| `POST`   | `/auth/logout-all`          | 🔒 Private | Security: Logout from all devices simultaneously      |
+| `GET`    | `/auth/sessions`            | 🔒 Private | List all active sessions for the user                 |
+| `DELETE` | `/auth/sessions/:id`        | 🔒 Private | Revoke a specific active session                      |
+| `GET`    | `/auth/verify-email`        | Public     | Verify email ownership via token                      |
+| `POST`   | `/auth/resend-verification` | Public     | Resend the email verification link                    |
+| `GET`    | `/auth/google/login`        | Public     | Redirects user to the Google Consent screen (Web)     |
+| `GET`    | `/auth/google/callback`     | Public     | Handles the callback code from Google                 |
+| `POST`   | `/auth/google/token`        | Public     | Verifies a Google ID token directly (Mobile/SDK flow) |
 
-Setelah di-mount ke `/api/settings`:
+### User Settings Endpoints (`/api/settings`)
 
-| Method | Path                     | Auth | Deskripsi            |
-| ------ | ------------------------ | ---- | -------------------- |
-| `GET`  | `/api/settings/profile`  | 🔒   | Get user profile     |
-| `PUT`  | `/api/settings/profile`  | 🔒   | Update username/name |
-| `PUT`  | `/api/settings/password` | 🔒   | Change password      |
-| `PUT`  | `/api/settings/avatar`   | 🔒   | Update avatar URL    |
+These routes manage user profile data.
+
+| Method | Path                     | Access     | Description                                    |
+| :----- | :----------------------- | :--------- | :--------------------------------------------- |
+| `GET`  | `/api/settings/profile`  | 🔒 Private | Retrieve the current user's profile            |
+| `PUT`  | `/api/settings/profile`  | 🔒 Private | Update basic info (username, full name)        |
+| `PUT`  | `/api/settings/password` | 🔒 Private | Authenticated password change                  |
+| `PUT`  | `/api/settings/avatar`   | 🔒 Private | Upload and update avatar (Multipart form-data) |
 
 ---
 
-## Exports
+## 📦 Exported Modules
 
-### Routes
+The package exports everything you need to build on top of its foundation.
 
-```typescript
-import { authRoutes, settingRoutes } from "@bambsdev/auth";
-```
-
-### Middleware
+### Routers & Middleware
 
 ```typescript
-import { dbMiddleware, customLogger, authMiddleware } from "@bambsdev/auth";
+import {
+  authRoutes,
+  settingRoutes,
+  dbMiddleware,
+  customLogger,
+  authMiddleware,
+} from "@bambsdev/auth";
 ```
 
-### DB Schema & Types
+### Database Schema & TypeScript Interfaces
 
 ```typescript
 import { schema, users, refreshTokens } from "@bambsdev/auth";
 import type { AuthBindings, AuthVariables, DB } from "@bambsdev/auth";
-import type { JWTAccessPayload, JWTRefreshPayload } from "@bambsdev/auth";
+import type {
+  JWTAccessPayload,
+  JWTRefreshPayload,
+  AuditEvent,
+} from "@bambsdev/auth";
 ```
 
-### Utilities
+### Validation Utilities & Services
 
 ```typescript
-import { ImageFilterService, parseBody } from "@bambsdev/auth";
+import {
+  ImageFilterService,
+  parseBody,
+  cleanupExpiredTokens,
+  cleanupExpiredPasswordResets,
+  cleanupExpiredEmailVerifications,
+} from "@bambsdev/auth";
+
 import { registerSchema, loginSchema, refreshSchema } from "@bambsdev/auth";
 ```
 
-### ImageFilterService
+### Highlight: `ImageFilterService`
 
-Utility untuk memfilter gambar (avatar, cover, dll) menggunakan Cloudflare AI:
+A powerful utility to automatically filter images using Cloudflare AI, preventing inappropriate content uploads.
 
 ```typescript
 import { ImageFilterService } from "@bambsdev/auth";
 
 const filter = new ImageFilterService(c.env.AI);
 
-// Cek apakah gambar diizinkan
+// Check if an image is appropriate
 const result = await filter.isImageAllowed("https://example.com/image.jpg");
-// → { allowed: true } atau { allowed: false, reason: "..." }
+// → { allowed: true } OR { allowed: false, reason: "Inappropriate content detected" }
 
-// Filter otomatis — return URL jika lolos, null jika ditolak
-const url = await filter.filterImageUrl("https://example.com/image.jpg");
-// → "https://example.com/image.jpg" atau null
+// Automatic Filtering — returns URL if safe, null if rejected
+const safeUrl = await filter.filterImageUrl("https://example.com/image.jpg");
 ```
 
 ---
 
-## Security Features
+## 🔐 Security Standards Implemented
 
-- ✅ JWT access + refresh token rotation
-- ✅ Refresh token family tracking (deteksi reuse attack)
-- ✅ Access token blacklisting via KV
-- ✅ Rate limiting (login, resend verification, Google token)
-- ✅ CSRF protection untuk Google OAuth (state parameter)
-- ✅ Password hashing (bcrypt-compatible)
-- ✅ Email verification flow
-- ✅ AI-powered image filtering (Cloudflare Workers AI)
-- ✅ Audit logging via Analytics Engine
+- ✅ **JWT Security**: Short-lived Access Tokens + Secure Refresh Token Rotation.
+- ✅ **Token Family Tracking**: Automatically detects Token Reuse Attacks and revokes the entire family.
+- ✅ **KV Blacklisting**: Immediate invalidation of access tokens upon logout.
+- ✅ **Rate Limiting**: Throttling for sensitive routes (Login, Password Reset, Resend Verification, Google Token validation).
+- ✅ **OAuth Protection**: CSRF protection via state parameters for Google Web flows.
+- ✅ **Hash Standards**: Strict bcrypt-compatible password hashing algorithms.
+- ✅ **Mandatory Email Verification**: Prevents unverified accounts from accessing sensitive areas.
+- ✅ **AI Content Moderation**: Cloudflare Workers AI prevents malicious or inappropriate avatar uploads.
+- ✅ **Audit Trails**: Extensive security logging via Cloudflare Analytics Engine.
 
 ---
 
-## License
+## 📜 License
 
-ISC
+ISC License
