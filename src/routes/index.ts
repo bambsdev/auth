@@ -709,6 +709,7 @@ const googleLoginRoute = createRoute({
   request: {
     query: z.object({
       clientType: clientTypeSchema.optional().openapi({ description: "Platform klien (web, mobile, desktop)" }),
+      redirectUrl: z.string().url().optional().openapi({ description: "URL frontend untuk redirect setelah login (Web Flow)" }),
     }),
   },
   responses: {
@@ -721,11 +722,12 @@ const googleLoginRoute = createRoute({
 authRoutes.openapi(googleLoginRoute, async (c) => {
   const querySchema = c.req.valid("query");
   const clientType = querySchema.clientType ?? "web";
+  const redirectUrl = querySchema.redirectUrl;
   const { googleService, cacheService } = makeServices(c);
 
   // Generate CSRF state token dan simpan di KV (TTL 10 menit)
   const state = crypto.randomUUID();
-  const statePayload = JSON.stringify({ clientType, ts: Date.now() });
+  const statePayload = JSON.stringify({ clientType, redirectUrl, ts: Date.now() });
   await cacheService.setOAuthState(state, statePayload);
 
   // Redirect URI = URL callback endpoint kita
@@ -770,6 +772,9 @@ const googleCallbackRoute = createRoute({
           }),
         },
       },
+    },
+    302: {
+      description: "Redirect ke frontend setelah login berhasil (Web Flow)",
     },
     400: {
       description: "Bad Request (Akses Ditolak, Missing Params, Invalid State)",
@@ -838,6 +843,7 @@ authRoutes.openapi(googleCallbackRoute, async (c) => {
 
   const parsed = JSON.parse(stateData) as {
     clientType: string;
+    redirectUrl?: string;
     ts: number;
   };
   const clientType =
@@ -883,7 +889,19 @@ authRoutes.openapi(googleCallbackRoute, async (c) => {
       });
     }
 
-    // Return JSON response dengan token
+    // Jika client web app meminta redirect, kembalikan parameter via redirect (untuk frontend callback)
+    if (parsed.redirectUrl) {
+      const targetUrl = new URL(parsed.redirectUrl);
+      targetUrl.searchParams.set("accessToken", result.accessToken);
+      targetUrl.searchParams.set("refreshToken", result.refreshToken);
+      targetUrl.searchParams.set("expiresIn", result.expiresIn.toString());
+      targetUrl.searchParams.set("isNewUser", result.isNewUser.toString());
+      targetUrl.searchParams.set("linked", result.linked.toString());
+
+      return c.redirect(targetUrl.toString(), 302);
+    }
+
+    // Return JSON response dengan token (untuk client mobile/desktop)
     return c.json({
       message: "Login via Google berhasil",
       accessToken: result.accessToken,
