@@ -20,7 +20,7 @@ export function extractR2KeyFromUrl(
 
   try {
     const defaultPrefix = proxyPrefix ?? "/api/settings/avatar-file/";
-    
+
     // 1. Cek apalah url mengandung proxy endpoint (relatif atau absolut sama saja)
     if (url.includes(defaultPrefix)) {
       const parts = url.split(defaultPrefix);
@@ -33,26 +33,26 @@ export function extractR2KeyFromUrl(
     if (bucketPublicUrl) {
       // Hapus semua trailing slash
       const base = bucketPublicUrl.replace(/\/+$/, "");
-      
+
       if (url.startsWith(base)) {
         // Misal: url = https://pub-xxx.r2.dev/auth/avatars/123.png
         // base = https://pub-xxx.r2.dev
         let key = url.slice(base.length);
         // key = /auth/avatars/123.png
         if (key.startsWith("/")) key = key.slice(1);
-        
+
         if (key.length > 0) return key;
       }
     }
 
     // 3. Regex Fallback super agresif untuk memastikan key ketemu meskipun config domain beda
     // Mencari format: folder/subfolder/UUID.ext
-    const fallbackRegex = /([a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[a-zA-Z0-9]+)$/i;
+    const fallbackRegex =
+      /([a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[a-zA-Z0-9]+)$/i;
     const match = url.match(fallbackRegex);
     if (match && match[1]) {
       return match[1];
     }
-
   } catch (err) {
     console.error("[extractR2KeyFromUrl] Error parsing URL:", err);
   }
@@ -70,7 +70,7 @@ export class R2UploadService {
 
   /**
    * Upload file ke R2 dan return key + URL.
-   * 
+   *
    * @param buffer     - File content sebagai ArrayBuffer
    * @param contentType - MIME type (e.g. "image/png")
    * @param prefix     - R2 key prefix (e.g. "auth/avatars", "store/logos")
@@ -99,7 +99,7 @@ export class R2UploadService {
   /**
    * Hapus file R2 berdasarkan URL lama (jika URL dari R2 kita).
    * Aman dipanggil dengan URL Google/eksternal — akan di-skip.
-   * 
+   *
    * @param oldUrl         - URL avatar lama dari DB
    * @param proxyPrefix    - Proxy prefix untuk ekstraksi key
    */

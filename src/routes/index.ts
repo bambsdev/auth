@@ -45,7 +45,11 @@ import {
   googleTokenSchema,
   clientTypeSchema,
 } from "../utils/validation";
-import { ErrorResponseSchema, TokenResponseSchema, BasicMessageSchema } from "../utils/openapi-schemas";
+import {
+  ErrorResponseSchema,
+  TokenResponseSchema,
+  BasicMessageSchema,
+} from "../utils/openapi-schemas";
 import type { Bindings, Variables, JWTAccessPayload } from "../types/index";
 
 export const authRoutes = new OpenAPIHono<{
@@ -221,7 +225,11 @@ authRoutes.openapi(registerRoute, async (c) => {
     return c.json(
       {
         message: "Registrasi berhasil. Silakan cek email untuk verifikasi.",
-        data: { id: user.id, email: user.email, createdAt: (user.createdAt as Date).toISOString() },
+        data: {
+          id: user.id,
+          email: user.email,
+          createdAt: (user.createdAt as Date).toISOString(),
+        },
       },
       201,
     );
@@ -295,13 +303,16 @@ authRoutes.openapi(loginRoute, async (c) => {
     await cacheService.clearRateLimit(ip); // reset counter saat login sukses
     audit.log({ event: "login_success", clientType, ip, metadata: { email } });
 
-    return c.json({
-      message: "Login berhasil",
-      accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
-      expiresIn: tokens.expiresIn,
-      tokenType: "Bearer",
-    }, 200);
+    return c.json(
+      {
+        message: "Login berhasil",
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        expiresIn: tokens.expiresIn,
+        tokenType: "Bearer",
+      },
+      200,
+    );
   } catch (err: any) {
     if (err.status === 401 || err.code === "INVALID_CREDENTIALS") {
       await cacheService.incrementRateLimit(ip);
@@ -320,7 +331,8 @@ const refreshRoute = createRoute({
   path: "/refresh",
   tags: ["Authentication"],
   summary: "Refresh Token",
-  description: "Mendapatkan JWT Akses baru menggunakan Refresh Token yang valid",
+  description:
+    "Mendapatkan JWT Akses baru menggunakan Refresh Token yang valid",
   request: {
     body: {
       content: { "application/json": { schema: refreshSchema } },
@@ -354,13 +366,16 @@ authRoutes.openapi(refreshRoute, async (c) => {
     const tokens = await authService.rotateRefreshToken(refreshToken);
     audit.log({ event: "token_refresh", ip: getIp(c) });
 
-    return c.json({
-      message: "Token berhasil diperbarui",
-      accessToken: tokens.accessToken,
-      refreshToken: tokens.refreshToken,
-      expiresIn: tokens.expiresIn,
-      tokenType: "Bearer",
-    }, 200);
+    return c.json(
+      {
+        message: "Token berhasil diperbarui",
+        accessToken: tokens.accessToken,
+        refreshToken: tokens.refreshToken,
+        expiresIn: tokens.expiresIn,
+        tokenType: "Bearer",
+      },
+      200,
+    );
   } catch (err: any) {
     if (err.code === "TOKEN_REUSE_DETECTED") {
       audit.log({ event: "token_reuse_detected", ip: getIp(c) });
@@ -429,7 +444,8 @@ const logoutAllRoute = createRoute({
   path: "/logout-all",
   tags: ["Authentication"],
   summary: "Logout All Sessions",
-  description: "Mencabut semua sesi / refresh token pengguna di semua perangkat",
+  description:
+    "Mencabut semua sesi / refresh token pengguna di semua perangkat",
   security: [{ Bearer: [] }],
   responses: {
     200: {
@@ -457,7 +473,8 @@ const getSessionsRoute = createRoute({
   path: "/sessions",
   tags: ["Session Management"],
   summary: "Get Active Sessions",
-  description: "Menampilkan daftar semua sesi perangkat (refresh token) yang aktif saat ini",
+  description:
+    "Menampilkan daftar semua sesi perangkat (refresh token) yang aktif saat ini",
   security: [{ Bearer: [] }],
   responses: {
     200: {
@@ -465,14 +482,20 @@ const getSessionsRoute = createRoute({
       content: {
         "application/json": {
           schema: z.object({
-            data: z.array(z.object({
-              id: z.string(),
-              createdAt: z.string().nullable(),
-              clientType: z.union([z.literal("web"), z.literal("mobile"), z.literal("desktop")]),
-              deviceInfo: z.any().nullable(),
-              expiresAt: z.string(),
-              lastUsedAt: z.string().nullable(),
-            })),
+            data: z.array(
+              z.object({
+                id: z.string(),
+                createdAt: z.string().nullable(),
+                clientType: z.union([
+                  z.literal("web"),
+                  z.literal("mobile"),
+                  z.literal("desktop"),
+                ]),
+                deviceInfo: z.any().nullable(),
+                expiresAt: z.string(),
+                lastUsedAt: z.string().nullable(),
+              }),
+            ),
           }),
         },
       },
@@ -484,7 +507,7 @@ authRoutes.openapi(getSessionsRoute, async (c) => {
   const { authService } = makeServices(c);
   const sessions = await authService.getSessions(c.var.userId);
 
-  const formatted = sessions.map(s => ({
+  const formatted = sessions.map((s) => ({
     ...s,
     createdAt: s.createdAt ? (s.createdAt as Date).toISOString() : null,
     expiresAt: (s.expiresAt as Date).toISOString(),
@@ -559,7 +582,8 @@ const verifyEmailRoute = createRoute({
   path: "/verify-email",
   tags: ["Authentication"],
   summary: "Verify Email",
-  description: "Memverifikasi alamat email pengguna menggunakan token yang dikirim via email.",
+  description:
+    "Memverifikasi alamat email pengguna menggunakan token yang dikirim via email.",
   request: {
     query: z.object({
       token: z.string().min(1, "Token verifikasi wajib diisi").openapi({
@@ -594,9 +618,12 @@ authRoutes.openapi(verifyEmailRoute, async (c) => {
       metadata: { email: result.email },
     });
 
-    return c.json({
-      message: "Email berhasil diverifikasi. Silakan login.",
-    }, 200);
+    return c.json(
+      {
+        message: "Email berhasil diverifikasi. Silakan login.",
+      },
+      200,
+    );
   } catch (err: any) {
     audit.log({
       event: "verification_failed",
@@ -616,7 +643,8 @@ const resendVerificationRoute = createRoute({
   path: "/resend-verification",
   tags: ["Authentication"],
   summary: "Resend Verification",
-  description: "Mengirim ulang email verifikasi jika belum kadaluarsa. Rate-limited.",
+  description:
+    "Mengirim ulang email verifikasi jika belum kadaluarsa. Rate-limited.",
   request: {
     body: {
       content: { "application/json": { schema: resendVerificationSchema } },
@@ -624,7 +652,8 @@ const resendVerificationRoute = createRoute({
   },
   responses: {
     200: {
-      description: "Email berhasil dikirim ulang (atau email sudah diverifikasi)",
+      description:
+        "Email berhasil dikirim ulang (atau email sudah diverifikasi)",
       content: { "application/json": { schema: BasicMessageSchema } },
     },
     429: {
@@ -640,7 +669,8 @@ const resendVerificationRoute = createRoute({
 
 authRoutes.openapi(resendVerificationRoute, async (c) => {
   const { email } = c.req.valid("json");
-  const { verificationService, emailService, cacheService, audit } = makeServices(c);
+  const { verificationService, emailService, cacheService, audit } =
+    makeServices(c);
   const ip = getIp(c);
 
   // Rate limit: max 3 resend per email per 15 menit
@@ -659,7 +689,8 @@ authRoutes.openapi(resendVerificationRoute, async (c) => {
   }
 
   try {
-    const { token, userId } = await verificationService.resendVerification(email);
+    const { token, userId } =
+      await verificationService.resendVerification(email);
 
     await cacheService.incrementRateLimit(rateLimitKey);
 
@@ -680,16 +711,22 @@ authRoutes.openapi(resendVerificationRoute, async (c) => {
         ),
     );
 
-    return c.json({
-      message: "Email verifikasi dikirim ulang. Silakan cek inbox Anda.",
-    }, 200);
+    return c.json(
+      {
+        message: "Email verifikasi dikirim ulang. Silakan cek inbox Anda.",
+      },
+      200,
+    );
   } catch (err: any) {
     // Untuk keamanan: jika user tidak ditemukan / sudah verified,
     // tetap return 200 yang sama (mencegah email enumeration)
     if (err.code === "USER_NOT_FOUND" || err.code === "ALREADY_VERIFIED") {
-      return c.json({
-        message: "Email verifikasi dikirim ulang. Silakan cek inbox Anda.",
-      }, 200);
+      return c.json(
+        {
+          message: "Email verifikasi dikirim ulang. Silakan cek inbox Anda.",
+        },
+        200,
+      );
     }
     return errorResponse(c, err);
   }
@@ -708,8 +745,12 @@ const googleLoginRoute = createRoute({
   description: "Redirect pengguna ke halaman persetujuan Google (Web Flow).",
   request: {
     query: z.object({
-      clientType: clientTypeSchema.optional().openapi({ description: "Platform klien (web, mobile, desktop)" }),
-      redirectUrl: z.string().url().optional().openapi({ description: "URL frontend untuk redirect setelah login (Web Flow)" }),
+      clientType: clientTypeSchema
+        .optional()
+        .openapi({ description: "Platform klien (web, mobile, desktop)" }),
+      redirectUrl: z.string().url().optional().openapi({
+        description: "URL frontend untuk redirect setelah login (Web Flow)",
+      }),
     }),
   },
   responses: {
@@ -727,7 +768,11 @@ authRoutes.openapi(googleLoginRoute, async (c) => {
 
   // Generate CSRF state token dan simpan di KV (TTL 10 menit)
   const state = crypto.randomUUID();
-  const statePayload = JSON.stringify({ clientType, redirectUrl, ts: Date.now() });
+  const statePayload = JSON.stringify({
+    clientType,
+    redirectUrl,
+    ts: Date.now(),
+  });
   await cacheService.setOAuthState(state, statePayload);
 
   // Redirect URI = URL callback endpoint kita
@@ -752,12 +797,19 @@ const googleCallbackRoute = createRoute({
   path: "/google/callback",
   tags: ["Google OAuth"],
   summary: "Google Callback",
-  description: "Menangani redirect setelah pengguna login via Google (Web Flow).",
+  description:
+    "Menangani redirect setelah pengguna login via Google (Web Flow).",
   request: {
     query: z.object({
-      code: z.string().optional().openapi({ description: "Otorisasi code dari Google" }),
+      code: z
+        .string()
+        .optional()
+        .openapi({ description: "Otorisasi code dari Google" }),
       state: z.string().optional().openapi({ description: "CSRF state token" }),
-      error: z.string().optional().openapi({ description: "Pesan error jika user menolak" }),
+      error: z
+        .string()
+        .optional()
+        .openapi({ description: "Pesan error jika user menolak" }),
     }),
   },
   responses: {
@@ -766,9 +818,16 @@ const googleCallbackRoute = createRoute({
       content: {
         "application/json": {
           schema: TokenResponseSchema.extend({
-            message: z.string().openapi({ example: "Login via Google berhasil" }),
-            isNewUser: z.boolean().openapi({ description: "Benar jika ini adalah register pertama kalinya" }),
-            linked: z.boolean().openapi({ description: "Benar jika akun Google ditautkan ke akun email/password yang sudah ada" }),
+            message: z
+              .string()
+              .openapi({ example: "Login via Google berhasil" }),
+            isNewUser: z.boolean().openapi({
+              description: "Benar jika ini adalah register pertama kalinya",
+            }),
+            linked: z.boolean().openapi({
+              description:
+                "Benar jika akun Google ditautkan ke akun email/password yang sudah ada",
+            }),
           }),
         },
       },
@@ -902,15 +961,18 @@ authRoutes.openapi(googleCallbackRoute, async (c) => {
     }
 
     // Return JSON response dengan token (untuk client mobile/desktop)
-    return c.json({
-      message: "Login via Google berhasil",
-      accessToken: result.accessToken,
-      refreshToken: result.refreshToken,
-      expiresIn: result.expiresIn,
-      tokenType: "Bearer",
-      isNewUser: result.isNewUser,
-      linked: result.linked,
-    }, 200);
+    return c.json(
+      {
+        message: "Login via Google berhasil",
+        accessToken: result.accessToken,
+        refreshToken: result.refreshToken,
+        expiresIn: result.expiresIn,
+        tokenType: "Bearer",
+        isNewUser: result.isNewUser,
+        linked: result.linked,
+      },
+      200,
+    );
   } catch (err: any) {
     audit.log({
       event: "google_login_failed",
@@ -931,7 +993,8 @@ const googleTokenRoute = createRoute({
   path: "/google/token",
   tags: ["Google OAuth"],
   summary: "Google SDK ID Token Validation",
-  description: "Memverifikasi token Google OAuth secara independen dari SDK Native (Mobile Flow).",
+  description:
+    "Memverifikasi token Google OAuth secara independen dari SDK Native (Mobile Flow).",
   request: {
     body: {
       content: { "application/json": { schema: googleTokenSchema } },
@@ -943,9 +1006,16 @@ const googleTokenRoute = createRoute({
       content: {
         "application/json": {
           schema: TokenResponseSchema.extend({
-            message: z.string().openapi({ example: "Login via Google ID Token berhasil" }),
-            isNewUser: z.boolean().openapi({ description: "Benar jika ini adalah register pertama kalinya" }),
-            linked: z.boolean().openapi({ description: "Benar jika akun Google ditautkan ke akun yang sudah ada" }),
+            message: z
+              .string()
+              .openapi({ example: "Login via Google ID Token berhasil" }),
+            isNewUser: z.boolean().openapi({
+              description: "Benar jika ini adalah register pertama kalinya",
+            }),
+            linked: z.boolean().openapi({
+              description:
+                "Benar jika akun Google ditautkan ke akun yang sudah ada",
+            }),
           }),
         },
       },
@@ -1019,15 +1089,18 @@ authRoutes.openapi(googleTokenRoute, async (c) => {
       });
     }
 
-    return c.json({
-      message: "Login via Google ID Token berhasil",
-      accessToken: result.accessToken,
-      refreshToken: result.refreshToken,
-      expiresIn: result.expiresIn,
-      tokenType: "Bearer",
-      isNewUser: result.isNewUser,
-      linked: result.linked,
-    }, 200);
+    return c.json(
+      {
+        message: "Login via Google ID Token berhasil",
+        accessToken: result.accessToken,
+        refreshToken: result.refreshToken,
+        expiresIn: result.expiresIn,
+        tokenType: "Bearer",
+        isNewUser: result.isNewUser,
+        linked: result.linked,
+      },
+      200,
+    );
   } catch (err: any) {
     await cacheService.incrementRateLimit(rateLimitKey);
     audit.log({
@@ -1073,7 +1146,8 @@ const forgotPasswordRoute = createRoute({
 
 authRoutes.openapi(forgotPasswordRoute, async (c) => {
   const { email } = c.req.valid("json");
-  const { passwordResetService, emailService, cacheService, audit } = makeServices(c);
+  const { passwordResetService, emailService, cacheService, audit } =
+    makeServices(c);
   const ip = getIp(c);
 
   // Rate limit: max 3 request per email per 15 menit
@@ -1084,7 +1158,8 @@ authRoutes.openapi(forgotPasswordRoute, async (c) => {
       {
         error: {
           code: "RATE_LIMITED",
-          message: "Terlalu banyak permintaan reset password. Coba lagi dalam 15 menit.",
+          message:
+            "Terlalu banyak permintaan reset password. Coba lagi dalam 15 menit.",
         },
       },
       429,
@@ -1123,9 +1198,12 @@ authRoutes.openapi(forgotPasswordRoute, async (c) => {
   }
 
   // Selalu return 200 — user tidak boleh tahu apakah email terdaftar atau tidak
-  return c.json({
-    message: "Jika email terdaftar, link reset password akan dikirim.",
-  }, 200);
+  return c.json(
+    {
+      message: "Jika email terdaftar, link reset password akan dikirim.",
+    },
+    200,
+  );
 });
 
 // ╔══════════════════════════════════════════════════════════════╗
@@ -1138,7 +1216,8 @@ const resetPasswordRoute = createRoute({
   path: "/reset-password",
   tags: ["Authentication"],
   summary: "Reset Password",
-  description: "Mengganti password menggunakan token reset password yang dikirim via email",
+  description:
+    "Mengganti password menggunakan token reset password yang dikirim via email",
   request: {
     body: {
       content: { "application/json": { schema: resetPasswordSchema } },
@@ -1171,9 +1250,13 @@ authRoutes.openapi(resetPasswordRoute, async (c) => {
       metadata: { email: result.email },
     });
 
-    return c.json({
-      message: "Password berhasil direset. Silakan login dengan password baru.",
-    }, 200);
+    return c.json(
+      {
+        message:
+          "Password berhasil direset. Silakan login dengan password baru.",
+      },
+      200,
+    );
   } catch (err: any) {
     return errorResponse(c, err);
   }

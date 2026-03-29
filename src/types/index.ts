@@ -15,7 +15,7 @@ export type Bindings = {
   GOOGLE_CLIENT_SECRET: string;
   AI: Ai; // Cloudflare Workers AI binding
   LOCAL_DATABASE_URL?: string; // used to bypass local hyperdrive proxy
-  BUCKET?: R2Bucket; // R2 Bucket untuk upload public files
+  R2_PUBLIC?: R2Bucket; // R2 Bucket untuk upload public files
   BUCKET_PUBLIC_URL?: string; // Base URL public bucket (opsional)
 };
 

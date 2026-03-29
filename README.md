@@ -130,7 +130,7 @@ binding = "HYPERDRIVE"
 id = "your-hyperdrive-id"
 
 [[r2_buckets]]
-binding = "BUCKET"
+binding = "R2_PUBLIC"
 bucket_name = "your-bucket-name"
 
 [[kv_namespaces]]

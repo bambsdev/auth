@@ -12,12 +12,12 @@ typescriptexport type Bindings = {
 
 // Consumer hanya perlu menyediakan SALAH SATU dari dua ini:
 // - Bucket binding untuk R2 upload (nama binding bisa dikonfigurasi)
-BUCKET?: R2Bucket; // nama generik — consumer bisa rename di wrangler.toml
+R2_PUBLIC?: R2Bucket; // nama generik — consumer bisa rename di wrangler.toml
 BUCKET_PUBLIC_URL?: string; // base URL public bucket, mis: https://pub-xyz.r2.dev
 
 // Jika consumer tidak punya public URL, avatar di-serve via proxy endpoint
 };
-Tapi ada masalah dengan pendekatan "nama binding bisa dikonfigurasi" — TypeScript harus tahu nama binding-nya saat compile time. Solusi yang lebih baik adalah mendokumentasikan bahwa consumer harus menggunakan nama binding tertentu. Ini lazim di library Cloudflare Workers. Kita tetap pakai BUCKET dan BUCKET_PUBLIC_URL sebagai konvensi.
+Tapi ada masalah dengan pendekatan "nama binding bisa dikonfigurasi" — TypeScript harus tahu nama binding-nya saat compile time. Solusi yang lebih baik adalah mendokumentasikan bahwa consumer harus menggunakan nama binding tertentu. Ini lazim di library Cloudflare Workers. Kita tetap pakai R2_PUBLIC dan BUCKET_PUBLIC_URL sebagai konvensi.
 src/utils/image-filter.ts — Tambah isImageBufferAllowed
 typescriptexport class ImageFilterService {
 constructor(private readonly ai: Ai) {}
@@ -88,8 +88,8 @@ const contentType = c.req.header("content-type") ?? "";
 if (contentType.includes("multipart/form-data")) {
 // ── Mode baru: upload file langsung ke R2 ──────────────────────────
 
-    // Pastikan binding tersedia — consumer harus konfigurasi BUCKET di wrangler.toml
-    if (!c.env.BUCKET) {
+    // Pastikan binding tersedia — consumer harus konfigurasi R2_PUBLIC di wrangler.toml
+    if (!c.env.R2_PUBLIC) {
       return c.json(
         { error: { code: "R2_NOT_CONFIGURED", message: "R2 bucket tidak dikonfigurasi" } },
         500,
@@ -160,7 +160,7 @@ if (contentType.includes("multipart/form-data")) {
     const ext = file.type.split("/")[1].replace("jpeg", "jpg");
     const key = `auth/avatars/${crypto.randomUUID()}.${ext}`;
 
-    await c.env.BUCKET.put(key, arrayBuffer, {
+    await c.env.R2_PUBLIC.put(key, arrayBuffer, {
       httpMetadata: { contentType: file.type },
     });
 
@@ -215,14 +215,14 @@ if (contentType.includes("multipart/form-data")) {
 // Dipakai kalau consumer tidak set BUCKET_PUBLIC_URL.
 // Serve file dari R2 dengan access control.
 settingRoutes.get("/avatar-file/\*", async (c) => {
-if (!c.env.BUCKET) {
+if (!c.env.R2_PUBLIC) {
 return c.json({ error: { code: "NOT_FOUND", message: "File tidak ditemukan" } }, 404);
 }
 
 // Ambil key dari URL path
 const key = c.req.path.replace("/api/settings/avatar-file/", "");
 
-const object = await c.env.BUCKET.get(key);
+const object = await c.env.R2_PUBLIC.get(key);
 if (!object) {
 return c.json({ error: { code: "NOT_FOUND", message: "File tidak ditemukan" } }, 404);
 }
@@ -257,12 +257,12 @@ return updated;
 }
 
 Ringkasan Arsitektur yang Direkomendasikan
-Satu bucket (BUCKET) dengan dua binding opsional di wrangler.toml consumer:
+Satu bucket (R2_PUBLIC) dengan dua binding opsional di wrangler.toml consumer:
 
 ```toml
 
 toml[[r2_buckets]]
-binding = "BUCKET"
+binding = "R2_PUBLIC"
 bucket_name = "my-app-bucket"
 
 ```
