@@ -168,8 +168,8 @@ const updateProfileRoute = createRoute({
       content: {
         "application/json": {
           schema: z.object({
-            message: z.string(),
             data: z.object({
+              message: z.string(),
               id: z.string(),
               username: z.string().nullable(),
               fullName: z.string().nullable(),
@@ -204,8 +204,10 @@ settingRoutes.openapi(updateProfileRoute, async (c) => {
 
     return c.json(
       {
-        message: "Profil berhasil diperbarui",
-        data: updated,
+        data: {
+          message: "Profil berhasil diperbarui",
+          ...updated,
+        },
       },
       200,
     );
@@ -237,8 +239,10 @@ const changePasswordRoute = createRoute({
       description: "Password berhasil diubah",
       content: {
         "application/json": {
-          schema: TokenResponseSchema.extend({
-            message: z.string(),
+          schema: z.object({
+            data: TokenResponseSchema.shape.data.extend({
+              message: z.string(),
+            }),
           }),
         },
       },
@@ -284,12 +288,14 @@ settingRoutes.openapi(changePasswordRoute, async (c) => {
 
     return c.json(
       {
-        message:
-          "Password berhasil diubah. Semua sesi lama dicabut, silakan login ulang di device lain.",
-        accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
-        expiresIn: tokens.expiresIn,
-        tokenType: "Bearer",
+        data: {
+          message:
+            "Password berhasil diubah. Semua sesi lama dicabut, silakan login ulang di device lain.",
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          expiresIn: tokens.expiresIn,
+          tokenType: "Bearer",
+        },
       },
       200,
     );
@@ -333,8 +339,8 @@ const avatarRoute = createRoute({
       content: {
         "application/json": {
           schema: z.object({
-            message: z.string(),
             data: z.object({
+              message: z.string(),
               id: z.string(),
               avatarUrl: z.string().nullable(),
               updatedAt: z.string(),
@@ -489,8 +495,8 @@ settingRoutes.openapi(avatarRoute, async (c) => {
 
       return c.json(
         {
-          message: "Avatar berhasil diperbarui",
           data: {
+            message: "Avatar berhasil diperbarui",
             id: result.id,
             avatarUrl: result.avatarUrl,
             updatedAt: (result.updatedAt as Date).toISOString(),

@@ -176,8 +176,8 @@ const registerRoute = createRoute({
       content: {
         "application/json": {
           schema: z.object({
-            message: z.string(),
             data: z.object({
+              message: z.string(),
               id: z.string(),
               email: z.string(),
               createdAt: z.string(),
@@ -224,8 +224,8 @@ authRoutes.openapi(registerRoute, async (c) => {
 
     return c.json(
       {
-        message: "Registrasi berhasil. Silakan cek email untuk verifikasi.",
         data: {
+          message: "Registrasi berhasil. Silakan cek email untuk verifikasi.",
           id: user.id,
           email: user.email,
           createdAt: (user.createdAt as Date).toISOString(),
@@ -305,11 +305,13 @@ authRoutes.openapi(loginRoute, async (c) => {
 
     return c.json(
       {
-        message: "Login berhasil",
-        accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
-        expiresIn: tokens.expiresIn,
-        tokenType: "Bearer",
+        data: {
+          message: "Login berhasil",
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          expiresIn: tokens.expiresIn,
+          tokenType: "Bearer",
+        },
       },
       200,
     );
@@ -368,11 +370,13 @@ authRoutes.openapi(refreshRoute, async (c) => {
 
     return c.json(
       {
-        message: "Token berhasil diperbarui",
-        accessToken: tokens.accessToken,
-        refreshToken: tokens.refreshToken,
-        expiresIn: tokens.expiresIn,
-        tokenType: "Bearer",
+        data: {
+          message: "Token berhasil diperbarui",
+          accessToken: tokens.accessToken,
+          refreshToken: tokens.refreshToken,
+          expiresIn: tokens.expiresIn,
+          tokenType: "Bearer",
+        },
       },
       200,
     );
@@ -432,7 +436,7 @@ authRoutes.openapi(logoutRoute, async (c) => {
     ip: getIp(c),
   });
 
-  return c.json({ message: "Logout berhasil" }, 200);
+  return c.json({ data: { message: "Logout berhasil" } }, 200);
 });
 
 // ╔══════════════════════════════════════════════════════════════╗
@@ -461,7 +465,7 @@ authRoutes.openapi(logoutAllRoute, async (c) => {
   await authService.logoutAll(c.var.userId);
   audit.log({ event: "logout_all", userId: c.var.userId, ip: getIp(c) });
 
-  return c.json({ message: "Semua sesi berhasil dicabut" }, 200);
+  return c.json({ data: { message: "Semua sesi berhasil dicabut" } }, 200);
 });
 
 // ╔══════════════════════════════════════════════════════════════╗
@@ -570,7 +574,7 @@ authRoutes.openapi(deleteSessionRoute, async (c) => {
     ip: getIp(c),
     metadata: { sessionId },
   });
-  return c.json({ message: "Sesi berhasil dicabut" }, 200);
+  return c.json({ data: { message: "Sesi berhasil dicabut" } }, 200);
 });
 
 // ╔══════════════════════════════════════════════════════════════╗
@@ -620,7 +624,9 @@ authRoutes.openapi(verifyEmailRoute, async (c) => {
 
     return c.json(
       {
-        message: "Email berhasil diverifikasi. Silakan login.",
+        data: {
+          message: "Email berhasil diverifikasi. Silakan login.",
+        },
       },
       200,
     );
@@ -713,7 +719,9 @@ authRoutes.openapi(resendVerificationRoute, async (c) => {
 
     return c.json(
       {
-        message: "Email verifikasi dikirim ulang. Silakan cek inbox Anda.",
+        data: {
+          message: "Email verifikasi dikirim ulang. Silakan cek inbox Anda.",
+        },
       },
       200,
     );
@@ -723,7 +731,9 @@ authRoutes.openapi(resendVerificationRoute, async (c) => {
     if (err.code === "USER_NOT_FOUND" || err.code === "ALREADY_VERIFIED") {
       return c.json(
         {
-          message: "Email verifikasi dikirim ulang. Silakan cek inbox Anda.",
+          data: {
+            message: "Email verifikasi dikirim ulang. Silakan cek inbox Anda.",
+          },
         },
         200,
       );
@@ -817,16 +827,18 @@ const googleCallbackRoute = createRoute({
       description: "Login via Google berhasil",
       content: {
         "application/json": {
-          schema: TokenResponseSchema.extend({
-            message: z
-              .string()
-              .openapi({ example: "Login via Google berhasil" }),
-            isNewUser: z.boolean().openapi({
-              description: "Benar jika ini adalah register pertama kalinya",
-            }),
-            linked: z.boolean().openapi({
-              description:
-                "Benar jika akun Google ditautkan ke akun email/password yang sudah ada",
+          schema: z.object({
+            data: TokenResponseSchema.shape.data.extend({
+              message: z
+                .string()
+                .openapi({ example: "Login via Google berhasil" }),
+              isNewUser: z.boolean().openapi({
+                description: "Benar jika ini adalah register pertama kalinya",
+              }),
+              linked: z.boolean().openapi({
+                description:
+                  "Benar jika akun Google ditautkan ke akun email/password yang sudah ada",
+              }),
             }),
           }),
         },
@@ -963,13 +975,15 @@ authRoutes.openapi(googleCallbackRoute, async (c) => {
     // Return JSON response dengan token (untuk client mobile/desktop)
     return c.json(
       {
-        message: "Login via Google berhasil",
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
-        expiresIn: result.expiresIn,
-        tokenType: "Bearer",
-        isNewUser: result.isNewUser,
-        linked: result.linked,
+        data: {
+          message: "Login via Google berhasil",
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+          expiresIn: result.expiresIn,
+          tokenType: "Bearer",
+          isNewUser: result.isNewUser,
+          linked: result.linked,
+        },
       },
       200,
     );
@@ -1005,16 +1019,18 @@ const googleTokenRoute = createRoute({
       description: "Login via Google ID Token berhasil",
       content: {
         "application/json": {
-          schema: TokenResponseSchema.extend({
-            message: z
-              .string()
-              .openapi({ example: "Login via Google ID Token berhasil" }),
-            isNewUser: z.boolean().openapi({
-              description: "Benar jika ini adalah register pertama kalinya",
-            }),
-            linked: z.boolean().openapi({
-              description:
-                "Benar jika akun Google ditautkan ke akun yang sudah ada",
+          schema: z.object({
+            data: TokenResponseSchema.shape.data.extend({
+              message: z
+                .string()
+                .openapi({ example: "Login via Google ID Token berhasil" }),
+              isNewUser: z.boolean().openapi({
+                description: "Benar jika ini adalah register pertama kalinya",
+              }),
+              linked: z.boolean().openapi({
+                description:
+                  "Benar jika akun Google ditautkan ke akun yang sudah ada",
+              }),
             }),
           }),
         },
@@ -1091,13 +1107,15 @@ authRoutes.openapi(googleTokenRoute, async (c) => {
 
     return c.json(
       {
-        message: "Login via Google ID Token berhasil",
-        accessToken: result.accessToken,
-        refreshToken: result.refreshToken,
-        expiresIn: result.expiresIn,
-        tokenType: "Bearer",
-        isNewUser: result.isNewUser,
-        linked: result.linked,
+        data: {
+          message: "Login via Google ID Token berhasil",
+          accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
+          expiresIn: result.expiresIn,
+          tokenType: "Bearer",
+          isNewUser: result.isNewUser,
+          linked: result.linked,
+        },
       },
       200,
     );
@@ -1200,7 +1218,9 @@ authRoutes.openapi(forgotPasswordRoute, async (c) => {
   // Selalu return 200 — user tidak boleh tahu apakah email terdaftar atau tidak
   return c.json(
     {
-      message: "Jika email terdaftar, link reset password akan dikirim.",
+      data: {
+        message: "Jika email terdaftar, link reset password akan dikirim.",
+      },
     },
     200,
   );
@@ -1252,8 +1272,10 @@ authRoutes.openapi(resetPasswordRoute, async (c) => {
 
     return c.json(
       {
-        message:
-          "Password berhasil direset. Silakan login dengan password baru.",
+        data: {
+          message:
+            "Password berhasil direset. Silakan login dengan password baru.",
+        },
       },
       200,
     );
