@@ -313,8 +313,8 @@ export class AuthService {
 
   // ── List Active Sessions ──────────────────────────────────────────────────
 
-  async getSessions(userId: string) {
-    return this.db.query.refreshTokens.findMany({
+  async getSessions(userId: string, currentFamilyId?: string) {
+    const sessions = await this.db.query.refreshTokens.findMany({
       where: and(
         eq(refreshTokens.userId, userId),
         eq(refreshTokens.isRevoked, false),
@@ -327,10 +327,20 @@ export class AuthService {
         createdAt: true,
         lastUsedAt: true,
         expiresAt: true,
-        familyId: false, // jangan ekspos ke client
+        familyId: true, // Ambil familyId untuk pencocokan internal
         tokenHash: false,
       },
     });
+
+    return sessions.map((s) => ({
+      id: s.id,
+      clientType: s.clientType,
+      deviceInfo: s.deviceInfo,
+      createdAt: s.createdAt,
+      lastUsedAt: s.lastUsedAt,
+      expiresAt: s.expiresAt,
+      isCurrent: currentFamilyId ? s.familyId === currentFamilyId : false,
+    }));
   }
 
   // ── Revoke Specific Session ───────────────────────────────────────────────

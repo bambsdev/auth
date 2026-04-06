@@ -71,6 +71,12 @@ export const authRoutes = new OpenAPIHono<{
   },
 });
 
+// ── Middleware Proteksi Routes ───────────────────────────────────────────────
+authRoutes.use("/logout", authMiddleware);
+authRoutes.use("/logout-all", authMiddleware);
+authRoutes.use("/sessions", authMiddleware);
+authRoutes.use("/sessions/*", authMiddleware);
+
 // ── Types untuk Hono Context ─────────────────────────────────────────────────
 type AppContext = Context<{ Bindings: Bindings; Variables: Variables }>;
 
@@ -480,6 +486,13 @@ const getSessionsRoute = createRoute({
   description:
     "Menampilkan daftar semua sesi perangkat (refresh token) yang aktif saat ini",
   security: [{ Bearer: [] }],
+  request: {
+    query: z.object({
+      currentFamilyId: z.string().optional().openapi({
+        description: "ID keluarga token untuk identifikasi sesi saat ini (internal)",
+      }),
+    }),
+  },
   responses: {
     200: {
       description: "Daftar sesi berhasil diambil",
@@ -498,6 +511,7 @@ const getSessionsRoute = createRoute({
                 deviceInfo: z.any().nullable(),
                 expiresAt: z.string(),
                 lastUsedAt: z.string().nullable(),
+                isCurrent: z.boolean().default(false),
               }),
             ),
           }),
@@ -508,8 +522,9 @@ const getSessionsRoute = createRoute({
 });
 
 authRoutes.openapi(getSessionsRoute, async (c) => {
+  const { currentFamilyId } = c.req.valid("query");
   const { authService } = makeServices(c);
-  const sessions = await authService.getSessions(c.var.userId);
+  const sessions = await authService.getSessions(c.var.userId, currentFamilyId);
 
   const formatted = sessions.map((s) => ({
     ...s,
@@ -761,6 +776,9 @@ const googleLoginRoute = createRoute({
       redirectUrl: z.string().url().optional().openapi({
         description: "URL frontend untuk redirect setelah login (Web Flow)",
       }),
+      state: z.string().optional().openapi({
+        description: "CSRF state token dari frontend",
+      }),
     }),
   },
   responses: {
@@ -776,8 +794,8 @@ authRoutes.openapi(googleLoginRoute, async (c) => {
   const redirectUrl = querySchema.redirectUrl;
   const { googleService, cacheService } = makeServices(c);
 
-  // Generate CSRF state token dan simpan di KV (TTL 10 menit)
-  const state = crypto.randomUUID();
+  // Use provided CSRF state from frontend if available, otherwise generate new
+  const state = querySchema.state || crypto.randomUUID();
   const statePayload = JSON.stringify({
     clientType,
     redirectUrl,
@@ -968,6 +986,7 @@ authRoutes.openapi(googleCallbackRoute, async (c) => {
       targetUrl.searchParams.set("expiresIn", result.expiresIn.toString());
       targetUrl.searchParams.set("isNewUser", result.isNewUser.toString());
       targetUrl.searchParams.set("linked", result.linked.toString());
+      targetUrl.searchParams.set("state", state); // Return state to frontend for validation
 
       return c.redirect(targetUrl.toString(), 302);
     }

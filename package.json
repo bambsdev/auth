@@ -1,6 +1,6 @@
 {
   "name": "@bambsdev/auth",
-  "version": "1.1.6",
+  "version": "1.1.9",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
