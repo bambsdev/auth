@@ -37,7 +37,7 @@ This package is built on a **Clean Service Layer Architecture**. Business logic 
 
 - **Web Flow**: Standard redirect-based authentication.
 - **Mobile Flow**: Direct Google ID Token validation tailored for Native SDKs (Android/iOS).
-- **Smart Account Linking**: Automatically links new Google logins to existing email/password registrations.
+- **Smart Account Linking**: Automatically links new Google logins to existing email/password registrations while intelligently preserving existing user data (e.g., custom avatars).
 
 ### 👤 User Settings & Profiles
 
@@ -300,6 +300,12 @@ const safeUrl = await filter.filterImageUrl("https://example.com/image.jpg");
 - ✅ **Mandatory Email Verification**: Prevents unverified accounts from accessing sensitive areas.
 - ✅ **AI Content Moderation**: Cloudflare Workers AI prevents malicious or inappropriate avatar uploads.
 - ✅ **Audit Trails**: Extensive security logging via Cloudflare Analytics Engine.
+
+## 📜 Changelog
+
+### v1.3.4
+- **🛡️ Security & UX**: Refined `avatarUrl` synchronization logic. The system now strictly preserves existing custom avatars and only pulls from Google for new account creations.
+- **⚡ Performance**: Optimized Google Login flow by removing redundant AI filtering calls for returning users.
 
 ---
 

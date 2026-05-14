@@ -79,6 +79,7 @@ export type AuditEvent =
   | "profile_updated"
   | "password_changed"
   | "avatar_updated"
+  | "avatar_deleted"
   | "avatar_blocked"
   // Password Reset
   | "forgot_password_requested"

@@ -154,7 +154,7 @@ export class ImageFilterService {
       try {
         const detections = (await this.ai.run("@cf/facebook/detr-resnet-50" as any, {
           image: Array.from(imageArray),
-        })) as { label: string; score: number }[];
+        }) as unknown) as { label: string; score: number }[];
 
         if (detections && Array.isArray(detections)) {
           // DEBUG: Log top results
@@ -216,7 +216,7 @@ export class ImageFilterService {
       try {
         const detections = (await this.ai.run("@cf/facebook/detr-resnet-50" as any, {
           image: Array.from(imageArray),
-        })) as { label: string; score: number }[];
+        }) as unknown) as { label: string; score: number }[];
 
         if (detections && Array.isArray(detections)) {
           // DEBUG: Log top results (Buffer)

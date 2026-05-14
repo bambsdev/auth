@@ -181,11 +181,6 @@ export class GoogleOAuthService {
 
     if (existingOAuth) {
       // User sudah pernah login via Google — update profil terbaru
-      // Filter avatar URL melalui AI sebelum simpan
-      const filteredAvatar = await this.imageFilter.filterImageUrl(
-        googleUser.picture,
-      );
-
       await this.db
         .update(oauthAccounts)
         .set({
@@ -210,17 +205,8 @@ export class GoogleOAuthService {
             email.split("@")[0],
           );
         }
-        // Jangan timpa (overwrite) custom name / avatar yang mungkin diatur user
         if (!existUser.fullName && googleUser.name) {
           userUpdates.fullName = googleUser.name;
-        }
-        if (filteredAvatar) {
-          const isCustomAvatar =
-            this.bucketPublicUrl &&
-            existUser.avatarUrl?.startsWith(this.bucketPublicUrl);
-          if (!isCustomAvatar) {
-            userUpdates.avatarUrl = filteredAvatar;
-          }
         }
       }
       await this.db
@@ -259,21 +245,11 @@ export class GoogleOAuthService {
         avatarUrl: googleUser.picture ?? null,
       });
 
-      // Filter avatar URL melalui AI sebelum simpan ke users
-      const filteredAvatar = await this.imageFilter.filterImageUrl(
-        googleUser.picture,
-      );
-
       // Update user: set email verified (Google sudah verify), update avatar, update name, set username if null
-      const isCustomAvatar =
-        this.bucketPublicUrl &&
-        existingUser.avatarUrl?.startsWith(this.bucketPublicUrl);
       const linkUpdates: Record<string, any> = {
         isEmailVerified: true,
         fullName: googleUser.name ?? existingUser.fullName ?? null,
-        avatarUrl: isCustomAvatar
-          ? existingUser.avatarUrl
-          : filteredAvatar ?? existingUser.avatarUrl ?? null,
+        avatarUrl: existingUser.avatarUrl,
         updatedAt: new Date(),
       };
       if (!existingUser.username) {

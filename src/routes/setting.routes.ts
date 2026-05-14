@@ -525,6 +525,75 @@ settingRoutes.openapi(avatarRoute, async (c) => {
 });
 
 // ╔══════════════════════════════════════════════════════════════╗
+// ║  DELETE /api/settings/avatar                🔒 Protected     ║
+// ╚══════════════════════════════════════════════════════════════╝
+
+const deleteAvatarRoute = createRoute({
+  method: "delete",
+  path: "/avatar",
+  tags: ["Settings"],
+  summary: "Delete Avatar",
+  description: "Menghapus avatar pengguna dan file fisiknya dari R2.",
+  security: [{ Bearer: [] }],
+  responses: {
+    200: {
+      description: "Avatar berhasil dihapus",
+      content: {
+        "application/json": {
+          schema: z.object({
+            data: z.object({
+              message: z.string(),
+              id: z.string(),
+              avatarUrl: z.null(),
+              updatedAt: z.string(),
+            }),
+          }),
+        },
+      },
+    },
+    401: {
+      description: "Unauthorized",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+settingRoutes.openapi(deleteAvatarRoute, async (c) => {
+  const { settingService, audit } = makeServices(c);
+  const userId = c.var.userId;
+  const ip = getIp(c);
+
+  try {
+    const result = await settingService.updateAvatarFromUrl(
+      userId,
+      null,
+      c.env.R2_PUBLIC,
+      c.env.BUCKET_PUBLIC_URL
+    );
+
+    audit.log({
+      event: "avatar_deleted",
+      userId,
+      ip,
+    });
+
+    return c.json(
+      {
+        data: {
+          message: "Avatar berhasil dihapus",
+          id: result.id,
+          avatarUrl: null,
+          updatedAt: (result.updatedAt as Date).toISOString(),
+        },
+      },
+      200,
+    );
+  } catch (err: any) {
+    return errorResponse(c, err);
+  }
+});
+
+// ╔══════════════════════════════════════════════════════════════╗
 // ║  GET /api/settings/avatar-file/*             Proxy           ║
 // ╚══════════════════════════════════════════════════════════════╝
 
