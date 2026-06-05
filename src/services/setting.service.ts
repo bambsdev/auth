@@ -9,7 +9,7 @@ import { hashPassword, verifyPassword } from "../utils/password";
 import { fail } from "../utils/error";
 import { extractR2KeyFromUrl } from "./r2-upload.service";
 import type { DB } from "../db/client";
-import type { ImageFilterService } from "../utils/image-filter";
+import type { IImageFilterService } from "../utils/image-filter";
 import type { AuthService } from "./auth.service";
 import type { ClientType } from "../config/token.config";
 
@@ -19,7 +19,7 @@ export class SettingService {
   constructor(
     private readonly db: DB,
     private readonly authService: AuthService,
-    private readonly imageFilter: ImageFilterService,
+    private readonly imageFilter: IImageFilterService,
   ) {}
 
   // ── Get Profile ──────────────────────────────────────────────────────────

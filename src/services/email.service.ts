@@ -11,11 +11,12 @@ export class EmailService {
     private readonly appUrl: string,
     private readonly from: string,
     private readonly templates?: EmailConfig["templates"],
+    private readonly resetPasswordBaseUrl?: string,
   ) {}
 
   /**
    * Kirim email verifikasi berisi link one-time.
-   * @param to   - Email tujuan
+   * @param to    - Email tujuan
    * @param token - Plain verification token (akan jadi query param)
    */
   async sendVerificationEmail(to: string, token: string): Promise<void> {
@@ -55,12 +56,57 @@ export class EmailService {
   }
 
   /**
+   * Kirim email verifikasi berisi kode OTP 6-digit.
+   * Template `verification` dari consumer juga dipakai di sini —
+   * consumer mengontrol tampilan, menerima `code` (string 6 digit) sebagai argumen.
+   * @param to   - Email tujuan
+   * @param code - Kode OTP 6-digit plain text
+   */
+  async sendVerificationCodeEmail(to: string, code: string): Promise<void> {
+    // Dev mode
+    if (!this.apiKey || this.apiKey === "dev") {
+      console.log(`[email-dev] Verification CODE untuk ${to}: ${code}`);
+      return;
+    }
+
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`,
+      },
+      body: JSON.stringify({
+        from: this.from,
+        to: [to],
+        subject: "Kode Verifikasi Email",
+        html: this.templates?.verification
+          ? this.templates.verification(code)
+          : this.buildVerificationCodeHtml(code),
+      }),
+    });
+
+    if (!res.ok) {
+      const body = await res.text();
+      console.error("[email] Resend API error (code):", res.status, body);
+      throw Object.assign(new Error("Gagal mengirim kode verifikasi"), {
+        code: "EMAIL_SEND_FAILED",
+        status: 500,
+      });
+    }
+  }
+
+  /**
    * Kirim email reset password berisi link one-time.
+   * Menggunakan `resetPasswordBaseUrl` (dari emailConfig consumer) jika ada,
+   * fallback ke `appUrl` (base URL API).
    * @param to    - Email tujuan
    * @param token - Plain reset token (akan jadi query param)
    */
   async sendForgotPasswordEmail(to: string, token: string): Promise<void> {
-    const resetUrl = `${this.appUrl}/auth/reset-password?token=${token}`;
+    // Gunakan resetPasswordBaseUrl jika consumer mengonfigurasi,
+    // fallback ke appUrl
+    const baseUrl = this.resetPasswordBaseUrl ?? this.appUrl;
+    const resetUrl = `${baseUrl}/auth/reset-password?token=${token}`;
 
     // Dev mode: log ke console saja
     if (!this.apiKey || this.apiKey === "dev") {
@@ -115,6 +161,26 @@ export class EmailService {
           Jika Anda tidak merasa mendaftar, abaikan email ini.<br>
           Atau salin link berikut ke browser Anda:<br>
           <a href="${verifyUrl}" style="color: #4f46e5; word-break: break-all;">${verifyUrl}</a>
+        </p>
+      </div>
+    `;
+  }
+
+  private buildVerificationCodeHtml(code: string): string {
+    return `
+      <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px;">
+        <h2 style="color: #1a1a2e; margin-bottom: 16px;">Kode Verifikasi Email</h2>
+        <p style="color: #444; line-height: 1.6;">
+          Terima kasih telah mendaftar! Gunakan kode di bawah untuk memverifikasi email Anda.
+          Kode ini berlaku selama <strong>15 menit</strong>.
+        </p>
+        <div style="text-align: center; margin: 32px 0; padding: 24px; background: #f5f5ff; border-radius: 12px; border: 2px dashed #4f46e5;">
+          <p style="color: #6b7280; font-size: 12px; letter-spacing: 2px; text-transform: uppercase; margin: 0 0 12px; font-weight: 600;">Kode Verifikasi</p>
+          <div style="letter-spacing: 12px; font-size: 42px; font-weight: 800; color: #4f46e5; font-family: 'Courier New', monospace;">${code}</div>
+          <p style="color: #9ca3af; font-size: 12px; margin: 12px 0 0;">Berlaku selama <strong style="color: #4f46e5;">15 menit</strong></p>
+        </div>
+        <p style="color: #888; font-size: 13px; line-height: 1.5;">
+          Jika Anda tidak merasa mendaftar, abaikan email ini.
         </p>
       </div>
     `;

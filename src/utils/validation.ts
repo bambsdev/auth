@@ -17,8 +17,8 @@ export const registerSchema = z.object({
   email: z
     .string()
     .email("Format email tidak valid")
-    .transform((v) => v.toLowerCase().trim())
-    .openapi({ example: "user@example.com", description: "Email pengguna" }),
+    .openapi({ example: "user@example.com", description: "Email pengguna" })
+    .transform((v) => v.toLowerCase().trim()),
   password: z
     .string()
     .min(6, "Password minimal 6 karakter")
@@ -37,8 +37,8 @@ export const loginSchema = z.object({
   email: z
     .string()
     .email("Format email tidak valid")
-    .transform((v) => v.toLowerCase().trim())
-    .openapi({ example: "user@example.com", description: "Email terdaftar" }),
+    .openapi({ example: "user@example.com", description: "Email terdaftar" })
+    .transform((v) => v.toLowerCase().trim()),
   password: z.string().min(1, "Password wajib diisi")
     .openapi({ example: "Password123!", description: "Kata sandi" }),
   clientType: clientTypeSchema,
@@ -64,8 +64,8 @@ export const verifyEmailCodeSchema = z.object({
   email: z
     .string()
     .email("Format email tidak valid")
-    .transform((v) => v.toLowerCase().trim())
-    .openapi({ example: "user@example.com", description: "Email yang didaftarkan" }),
+    .openapi({ example: "user@example.com", description: "Email yang didaftarkan" })
+    .transform((v) => v.toLowerCase().trim()),
   code: z
     .string()
     .length(6, "Kode verifikasi harus 6 digit")
@@ -79,8 +79,8 @@ export const resendVerificationSchema = z.object({
   email: z
     .string()
     .email("Format email tidak valid")
-    .transform((v) => v.toLowerCase().trim())
-    .openapi({ example: "user@example.com", description: "Email untuk kirim ulang" }),
+    .openapi({ example: "user@example.com", description: "Email untuk kirim ulang" })
+    .transform((v) => v.toLowerCase().trim()),
 }).openapi("ResendVerificationRequest");
 
 // ── Forgot Password ───────────────────────────────────────────────────────────
@@ -89,8 +89,8 @@ export const forgotPasswordSchema = z.object({
   email: z
     .string()
     .email("Format email tidak valid")
-    .transform((v) => v.toLowerCase().trim())
-    .openapi({ example: "user@example.com", description: "Email reset" }),
+    .openapi({ example: "user@example.com", description: "Email reset" })
+    .transform((v) => v.toLowerCase().trim()),
 }).openapi("ForgotPasswordRequest");
 
 // ── Reset Password ────────────────────────────────────────────────────────────

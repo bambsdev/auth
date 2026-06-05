@@ -18,6 +18,7 @@
 
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { verify } from "hono/jwt";
+import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import type { Context } from "hono";
 import { CacheService } from "../services/cache.service";
 import { AuthService } from "../services/auth.service";
@@ -44,6 +45,7 @@ import {
   resetPasswordSchema,
   googleTokenSchema,
   clientTypeSchema,
+  verifyEmailCodeSchema,
 } from "../utils/validation";
 import {
   ErrorResponseSchema,
@@ -102,10 +104,11 @@ function makeServices(c: AppContext) {
     c.env.APP_URL,
     emailFrom,
     c.var.emailConfig?.templates,
+    c.var.emailConfig?.resetPasswordBaseUrl,
   );
   const verificationService = new VerificationService(db);
   const passwordResetService = new PasswordResetService(db);
-  const imageFilter = new ImageFilterService(c.env.AI);
+  const imageFilter = new ImageFilterService(c.env.AI, c.var.imageFilterConfig);
   const googleService = new GoogleOAuthService(
     db,
     authService,
@@ -206,21 +209,28 @@ const registerRoute = createRoute({
 authRoutes.openapi(registerRoute, async (c) => {
   const validated = c.req.valid("json");
   const { db, audit, emailService, verificationService } = makeServices(c);
+  const verificationMethod = c.var.emailConfig?.verificationMethod ?? "link";
 
   try {
     const registerService = new RegisterService(db);
     // TypeScript knows validated is RegisterInput
     const user = await registerService.register(validated);
 
-    // Generate verification token & kirim email (tunggu hingga selesai)
-    const token = await verificationService.createVerificationToken(user.id);
+    // Kirim email verifikasi sesuai metode yang dikonfigurasi consumer
     try {
-      await emailService.sendVerificationEmail(user.email, token);
+      const ttl = c.var.emailConfig?.verificationCodeTtlMinutes;
+      if (verificationMethod === "code") {
+        const code = await verificationService.createVerificationCode(user.id, ttl);
+        await emailService.sendVerificationCodeEmail(user.email, code);
+      } else {
+        const token = await verificationService.createVerificationToken(user.id);
+        await emailService.sendVerificationEmail(user.email, token);
+      }
       audit.log({
         event: "verification_sent",
         userId: user.id,
         ip: getIp(c),
-        metadata: { email: user.email },
+        metadata: { email: user.email, method: verificationMethod },
       });
     } catch (err: any) {
       console.error("[register] Failed to send verification email:", err);
@@ -693,6 +703,7 @@ authRoutes.openapi(resendVerificationRoute, async (c) => {
   const { verificationService, emailService, cacheService, audit } =
     makeServices(c);
   const ip = getIp(c);
+  const verificationMethod = c.var.emailConfig?.verificationMethod ?? "link";
 
   // Rate limit: max 3 resend per email per 15 menit
   const rateLimitKey = `resend-verify:${email}`;
@@ -710,27 +721,50 @@ authRoutes.openapi(resendVerificationRoute, async (c) => {
   }
 
   try {
-    const { token, userId } =
-      await verificationService.resendVerification(email);
-
     await cacheService.incrementRateLimit(rateLimitKey);
 
-    // Kirim email (non-blocking)
-    c.executionCtx.waitUntil(
-      emailService
-        .sendVerificationEmail(email, token)
-        .then(() =>
-          audit.log({
-            event: "verification_sent",
-            userId,
-            ip,
-            metadata: { email },
-          }),
-        )
-        .catch((err: any) =>
-          console.error("[resend-verification] Email send failed:", err),
-        ),
-    );
+    const ttl = c.var.emailConfig?.verificationCodeTtlMinutes;
+    if (verificationMethod === "code") {
+      const { code, userId } =
+        await verificationService.resendVerificationCode(email, ttl);
+
+      // Kirim OTP code (non-blocking)
+      c.executionCtx.waitUntil(
+        emailService
+          .sendVerificationCodeEmail(email, code)
+          .then(() =>
+            audit.log({
+              event: "verification_sent",
+              userId,
+              ip,
+              metadata: { email, method: "code" },
+            }),
+          )
+          .catch((err: any) =>
+            console.error("[resend-verification] Code email send failed:", err),
+          ),
+      );
+    } else {
+      const { token, userId } =
+        await verificationService.resendVerification(email);
+
+      // Kirim link (non-blocking)
+      c.executionCtx.waitUntil(
+        emailService
+          .sendVerificationEmail(email, token)
+          .then(() =>
+            audit.log({
+              event: "verification_sent",
+              userId,
+              ip,
+              metadata: { email, method: "link" },
+            }),
+          )
+          .catch((err: any) =>
+            console.error("[resend-verification] Link email send failed:", err),
+          ),
+      );
+    }
 
     return c.json(
       {
@@ -753,6 +787,71 @@ authRoutes.openapi(resendVerificationRoute, async (c) => {
         200,
       );
     }
+    return errorResponse(c, err);
+  }
+});
+
+// ╔══════════════════════════════════════════════════════════════╗
+// ║  POST /auth/verify-email-code                                ║
+// ║  Code (OTP) flow: verifikasi dengan 6-digit code + email     ║
+// ╚══════════════════════════════════════════════════════════════╝
+
+const verifyEmailCodeRoute = createRoute({
+  method: "post",
+  path: "/verify-email-code",
+  tags: ["Authentication"],
+  summary: "Verify Email via OTP Code",
+  description:
+    "Memverifikasi email menggunakan kode OTP 6-digit yang dikirim via email (Code Flow).",
+  request: {
+    body: {
+      content: { "application/json": { schema: verifyEmailCodeSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: "Email berhasil diverifikasi",
+      content: { "application/json": { schema: BasicMessageSchema } },
+    },
+    400: {
+      description: "Kode tidak valid, sudah dipakai, atau sudah expired",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+    401: {
+      description: "Email atau kode tidak dikenali",
+      content: { "application/json": { schema: ErrorResponseSchema } },
+    },
+  },
+});
+
+authRoutes.openapi(verifyEmailCodeRoute, async (c) => {
+  const { email, code } = c.req.valid("json");
+  const { verificationService, audit } = makeServices(c);
+
+  try {
+    const result = await verificationService.verifyEmailCode(email, code);
+
+    audit.log({
+      event: "email_verified",
+      userId: result.userId,
+      ip: getIp(c),
+      metadata: { email: result.email, method: "code" },
+    });
+
+    return c.json(
+      {
+        data: {
+          message: "Email berhasil diverifikasi. Silakan login.",
+        },
+      },
+      200,
+    );
+  } catch (err: any) {
+    audit.log({
+      event: "verification_failed",
+      ip: getIp(c),
+      metadata: { reason: err.code, method: "code" },
+    });
     return errorResponse(c, err);
   }
 });
@@ -806,6 +905,17 @@ authRoutes.openapi(googleLoginRoute, async (c) => {
   // Redirect URI = URL callback endpoint kita
   const url = new URL(c.req.url);
   const redirectUri = `${url.origin}/auth/google/callback`;
+
+  // Simpan redirectUrl ke cookie untuk fallback jika state expired
+  if (redirectUrl) {
+    setCookie(c, "oauth_redirect_url", redirectUrl, {
+      path: "/auth/google/callback",
+      maxAge: 600, // 10 menit
+      secure: true,
+      httpOnly: true,
+      sameSite: "Lax",
+    });
+  }
 
   const authorizationUrl = googleService.getAuthorizationUrl(
     state,
@@ -878,6 +988,53 @@ authRoutes.openapi(googleCallbackRoute, async (c) => {
 
   const { googleService, cacheService, audit } = makeServices(c);
 
+  // Helper untuk melakukan redirect error ke frontend
+  const handleErrorRedirect = async (errorMessage: string, stateValue?: string) => {
+    let redirectUrl = "";
+    
+    // 1. Coba ambil dari KV state jika valid
+    if (stateValue) {
+      const kvState = await cacheService.getOAuthState(stateValue);
+      if (kvState) {
+        try {
+          const parsed = JSON.parse(kvState);
+          if (parsed.redirectUrl) {
+            redirectUrl = parsed.redirectUrl;
+          }
+        } catch {}
+      }
+    }
+    
+    // 2. Coba ambil dari cookie
+    if (!redirectUrl) {
+      redirectUrl = getCookie(c, "oauth_redirect_url") ?? "";
+    }
+    
+    // 3. Fallback ke default origin
+    if (!redirectUrl) {
+      const allowedRaw = (c.env as any).ALLOWED_ORIGINS ?? "";
+      const allowedOrigins = allowedRaw
+        .split(",")
+        .map((o: string) => o.trim())
+        .filter(Boolean);
+      const origin = allowedOrigins[0] || "https://rakkita.id";
+      redirectUrl = `${origin}/google-callback`;
+    }
+    
+    // Hapus cookie dan KV state
+    deleteCookie(c, "oauth_redirect_url", { path: "/auth/google/callback" });
+    if (stateValue) {
+      await cacheService.deleteOAuthState(stateValue);
+    }
+    
+    const targetUrl = new URL(redirectUrl);
+    targetUrl.searchParams.set("error", errorMessage);
+    if (stateValue) {
+      targetUrl.searchParams.set("state", stateValue);
+    }
+    return c.redirect(targetUrl.toString(), 302);
+  };
+
   // Google mengirim error jika user menolak consent
   if (error) {
     audit.log({
@@ -885,27 +1042,11 @@ authRoutes.openapi(googleCallbackRoute, async (c) => {
       ip,
       metadata: { reason: error },
     });
-    return c.json(
-      {
-        error: {
-          code: "GOOGLE_AUTH_DENIED",
-          message: "Akses Google ditolak oleh user",
-        },
-      },
-      400,
-    );
+    return handleErrorRedirect(error === "access_denied" ? "access_denied" : error, state);
   }
 
   if (!code || !state) {
-    return c.json(
-      {
-        error: {
-          code: "MISSING_PARAMS",
-          message: "Parameter code dan state wajib ada",
-        },
-      },
-      400,
-    );
+    return handleErrorRedirect("Parameter code dan state wajib ada", state);
   }
 
   // Validasi state dari KV (anti-CSRF), one-time use
@@ -916,15 +1057,7 @@ authRoutes.openapi(googleCallbackRoute, async (c) => {
       ip,
       metadata: { reason: "INVALID_STATE" },
     });
-    return c.json(
-      {
-        error: {
-          code: "INVALID_STATE",
-          message: "State tidak valid atau sudah expired",
-        },
-      },
-      400,
-    );
+    return handleErrorRedirect("State tidak valid atau sudah expired", state);
   }
 
   // Hapus state setelah dipakai (one-time use)
@@ -978,6 +1111,9 @@ authRoutes.openapi(googleCallbackRoute, async (c) => {
       });
     }
 
+    // Hapus cookie cadangan setelah sukses login
+    deleteCookie(c, "oauth_redirect_url", { path: "/auth/google/callback" });
+
     // Jika client web app meminta redirect, kembalikan parameter via redirect (untuk frontend callback)
     if (parsed.redirectUrl) {
       const targetUrl = new URL(parsed.redirectUrl);
@@ -1012,7 +1148,31 @@ authRoutes.openapi(googleCallbackRoute, async (c) => {
       ip,
       metadata: { reason: err.code ?? err.message },
     });
-    return errorResponse(c, err);
+    
+    // Redirect error ke frontend jika ada redirectUrl atau cookie
+    let redirectUrl = parsed.redirectUrl;
+    if (!redirectUrl) {
+      redirectUrl = getCookie(c, "oauth_redirect_url") ?? "";
+    }
+    if (!redirectUrl) {
+      const allowedRaw = (c.env as any).ALLOWED_ORIGINS ?? "";
+      const allowedOrigins = allowedRaw
+        .split(",")
+        .map((o: string) => o.trim())
+        .filter(Boolean);
+      const origin = allowedOrigins[0] || "https://rakkita.id";
+      redirectUrl = `${origin}/google-callback`;
+    }
+    
+    deleteCookie(c, "oauth_redirect_url", { path: "/auth/google/callback" });
+    
+    const errorMessage = err.message || "Gagal memproses autentikasi Google";
+    const targetUrl = new URL(redirectUrl);
+    targetUrl.searchParams.set("error", errorMessage);
+    if (state) {
+      targetUrl.searchParams.set("state", state);
+    }
+    return c.redirect(targetUrl.toString(), 302);
   }
 });
 

@@ -26,12 +26,17 @@ export type Variables = {
   clientType: ClientType;
   db: import("../db/client").DB;
   emailConfig?: EmailConfig; // Injeksi config email dari consumer
+  imageFilterConfig?: import("../utils/image-filter").ImageFilterConfig; // Injeksi config image filter dari consumer
 };
 
 export interface EmailConfig {
   from: string;
+  verificationMethod?: "link" | "code";
+  verificationCodeTtlMinutes?: number;
+  verificationBaseUrl?: string;
+  resetPasswordBaseUrl?: string;
   templates?: {
-    verification?: (url: string) => string;
+    verification?: (urlOrCode: string) => string;
     forgotPassword?: (url: string) => string;
   };
 }

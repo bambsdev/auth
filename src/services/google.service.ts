@@ -8,7 +8,7 @@ import { users, oauthAccounts } from "../db/schema";
 import { fail } from "../utils/error";
 import type { DB } from "../db/client";
 import type { AuthService } from "./auth.service";
-import type { ImageFilterService } from "../utils/image-filter";
+import type { IImageFilterService } from "../utils/image-filter";
 import type { ClientType } from "../config/token.config";
 
 export interface GoogleUserInfo {
@@ -43,7 +43,7 @@ export class GoogleOAuthService {
   constructor(
     private readonly db: DB,
     private readonly authService: AuthService,
-    private readonly imageFilter: ImageFilterService,
+    private readonly imageFilter: IImageFilterService,
     private readonly clientId: string,
     private readonly clientSecret: string,
     private readonly bucketPublicUrl?: string,
@@ -298,7 +298,8 @@ export class GoogleOAuthService {
         providerUserId: googleUser.sub,
         email,
         displayName: googleUser.name ?? null,
-        avatarUrl: googleUser.picture ?? null,
+        // Simpan filteredAvatar (sudah di-filter AI) agar konsisten dengan users.avatarUrl
+        avatarUrl: filteredAvatar,
       });
 
       return created;

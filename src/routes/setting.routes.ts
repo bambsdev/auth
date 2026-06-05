@@ -61,7 +61,7 @@ function makeServices(c: AppContext) {
     c.env.JWT_SECRET,
     c.env.JWT_REFRESH_SECRET,
   );
-  const imageFilter = new ImageFilterService(c.env.AI);
+  const imageFilter = new ImageFilterService(c.env.AI, c.var.imageFilterConfig);
   const settingService = new SettingService(db, authService, imageFilter);
   const audit = new AuditService(c.env.ANALYTICS);
   return { settingService, cacheService, imageFilter, audit };
