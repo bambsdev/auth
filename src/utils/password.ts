@@ -27,7 +27,7 @@ export async function hashPassword(password: string): Promise<string> {
     KEY_LENGTH,
   );
 
-  return `${toHex(salt.buffer)}:${toHex(derivedBits)}`;
+  return `${toHex(salt.buffer.slice(salt.byteOffset, salt.byteOffset + salt.byteLength))}:${toHex(derivedBits)}`;
 }
 
 export async function verifyPassword(
@@ -61,10 +61,10 @@ export async function verifyPassword(
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i++) {
-    diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  const maxLen = Math.max(a.length, b.length);
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < maxLen; i++) {
+    diff |= (a.charCodeAt(i) || 0) ^ (b.charCodeAt(i) || 0);
   }
   return diff === 0;
 }

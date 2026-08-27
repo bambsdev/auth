@@ -1,0 +1,588 @@
+// src/routes/factory/setting.factory.ts
+import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
+import { CacheService } from "../../services/cache.service";
+import { AuthService } from "../../services/auth.service";
+import { AuditService } from "../../services/audit.service";
+import { SettingService } from "../../services/setting.service";
+import { R2UploadService } from "../../services/r2-upload.service";
+import { ImageFilterService } from "../../utils/image-filter";
+import { authMiddleware } from "../../middleware/auth.middleware";
+import {
+  updateProfileSchema,
+  changePasswordSchema,
+} from "../../utils/validation";
+import {
+  ErrorResponseSchema,
+  TokenResponseSchema,
+} from "../../utils/openapi-schemas";
+import type { SharedAuthBindings, JWTAccessPayload } from "../../types/index";
+import type { AuthDbDialect } from "../../db/adapter";
+import { type AppContext, getIp, errorResponse } from "./shared";
+
+function makeServices(c: AppContext, dialect: AuthDbDialect) {
+  const db = c.var.db;
+  const cacheService = new CacheService(c.env.KV, caches.default);
+  const authService = new AuthService(
+    db,
+    cacheService,
+    c.env.JWT_SECRET,
+    c.env.JWT_REFRESH_SECRET,
+    dialect,
+  );
+  const imageFilter = new ImageFilterService(c.env.AI, c.var.imageFilterConfig);
+  const settingService = new SettingService(db, authService, imageFilter, dialect);
+  const audit = new AuditService(c.env.ANALYTICS);
+  return { settingService, cacheService, imageFilter, audit };
+}
+
+export function createSettingRoutes<
+  TBindings extends SharedAuthBindings = any,
+  TVariables extends Record<string, any> = any,
+>(dialect: AuthDbDialect = "pg") {
+  const settingRoutes = new OpenAPIHono<{
+    Bindings: TBindings;
+    Variables: TVariables;
+  }>({
+    defaultHook: (result, c) => {
+      if (!result.success) {
+        return c.json(
+          {
+            error: {
+              code: "VALIDATION_ERROR",
+              message: result.error.issues[0]?.message || "Input tidak valid",
+            },
+          },
+          400,
+        );
+      }
+    },
+  });
+
+  settingRoutes.use("*", authMiddleware as any);
+
+  // ── Get Profile ──────────────────────────────────────────────────────────
+  const getProfileRoute = createRoute({
+    method: "get",
+    path: "/profile",
+    tags: ["Settings"],
+    summary: "Get My Profile",
+    description: "Mengambil data profil pengguna yang sedang login.",
+    security: [{ Bearer: [] }],
+    responses: {
+      200: {
+        description: "Profil berhasil diambil",
+        content: {
+          "application/json": {
+            schema: z.object({
+              data: z.object({
+                id: z.string(),
+                email: z.string(),
+                username: z.string().nullable(),
+                fullName: z.string().nullable(),
+                avatarUrl: z.string().nullable(),
+                isEmailVerified: z.boolean().nullable(),
+                hasPassword: z.boolean(),
+                createdAt: z.string(),
+                updatedAt: z.string().nullable(),
+              }),
+            }),
+          },
+        },
+      },
+      401: {
+        description: "Unauthorized",
+        content: { "application/json": { schema: ErrorResponseSchema } },
+      },
+    },
+  });
+
+  settingRoutes.openapi(getProfileRoute, async (c: any) => {
+    const { settingService } = makeServices(c, dialect);
+
+    try {
+      const profile = await settingService.getProfile(c.var.userId);
+      return c.json(
+        {
+          data: {
+            ...profile,
+            createdAt: profile.createdAt instanceof Date ? profile.createdAt.toISOString() : new Date(profile.createdAt).toISOString(),
+            updatedAt: profile.updatedAt
+              ? (profile.updatedAt instanceof Date ? profile.updatedAt.toISOString() : new Date(profile.updatedAt).toISOString())
+              : null,
+          },
+        },
+        200,
+      );
+    } catch (err: any) {
+      return errorResponse(c, err);
+    }
+  });
+
+  // ── Update Profile ───────────────────────────────────────────────────────
+  const updateProfileRoute = createRoute({
+    method: "put",
+    path: "/profile",
+    tags: ["Settings"],
+    summary: "Update Profile",
+    description: "Memperbarui data username atau nama lengkap.",
+    security: [{ Bearer: [] }],
+    request: {
+      body: {
+        content: { "application/json": { schema: updateProfileSchema } },
+      },
+    },
+    responses: {
+      200: {
+        description: "Profil berhasil diperbarui",
+        content: {
+          "application/json": {
+            schema: z.object({
+              data: z.object({
+                message: z.string(),
+                id: z.string(),
+                username: z.string().nullable(),
+                fullName: z.string().nullable(),
+              }),
+            }),
+          },
+        },
+      },
+      400: {
+        description: "Bad Request (Validation Error)",
+        content: { "application/json": { schema: ErrorResponseSchema } },
+      },
+    },
+  });
+
+  settingRoutes.openapi(updateProfileRoute, async (c: any) => {
+    const validated = c.req.valid("json");
+    const { settingService, audit } = makeServices(c, dialect);
+
+    try {
+      const updated = await settingService.updateProfile(c.var.userId, validated);
+
+      audit.log({
+        event: "profile_updated",
+        userId: c.var.userId,
+        ip: getIp(c),
+        metadata: {
+          username: validated.username,
+          fullName: validated.fullName,
+        },
+      });
+
+      return c.json(
+        {
+          data: {
+            message: "Profil berhasil diperbarui",
+            ...updated,
+          },
+        },
+        200,
+      );
+    } catch (err: any) {
+      return errorResponse(c, err);
+    }
+  });
+
+  // ── Change Password ──────────────────────────────────────────────────────
+  const changePasswordRoute = createRoute({
+    method: "put",
+    path: "/password",
+    tags: ["Settings"],
+    summary: "Change Password",
+    description: "Mengubah kata sandi pengguna saat ini. Mengeluarkan semua sesi di perangkat lain.",
+    security: [{ Bearer: [] }],
+    request: {
+      body: {
+        content: { "application/json": { schema: changePasswordSchema } },
+      },
+    },
+    responses: {
+      200: {
+        description: "Password berhasil diubah",
+        content: {
+          "application/json": {
+            schema: z.object({
+              data: TokenResponseSchema.shape.data.extend({
+                message: z.string(),
+              }),
+            }),
+          },
+        },
+      },
+      400: {
+        description: "Bad Request (Password salah / Validation Error)",
+        content: { "application/json": { schema: ErrorResponseSchema } },
+      },
+    },
+  });
+
+  settingRoutes.openapi(changePasswordRoute, async (c: any) => {
+    const { currentPassword, newPassword, clientType } = c.req.valid("json");
+    const { settingService, cacheService, audit } = makeServices(c, dialect);
+    const ip = getIp(c);
+    const ua = c.req.header("User-Agent") ?? "";
+
+    try {
+      const tokens = await settingService.changePassword(
+        c.var.userId,
+        { currentPassword, newPassword },
+        clientType,
+        { ua, ip },
+      );
+
+      const exp = c.var.exp ?? Math.floor(Date.now() / 1000) + 900;
+      const remaining = exp - Math.floor(Date.now() / 1000);
+      if (remaining > 0) {
+        await cacheService.blacklistToken(c.var.jti, remaining);
+      }
+
+      audit.log({
+        event: "password_changed",
+        userId: c.var.userId,
+        ip,
+      });
+
+      return c.json(
+        {
+          data: {
+            message:
+              "Password berhasil diubah. Semua sesi lama dicabut, silakan login ulang di device lain.",
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
+            expiresIn: tokens.expiresIn,
+            tokenType: "Bearer",
+          },
+        },
+        200,
+      );
+    } catch (err: any) {
+      return errorResponse(c, err);
+    }
+  });
+
+  // ── Upload Avatar ────────────────────────────────────────────────────────
+  const avatarRoute = createRoute({
+    method: "put",
+    path: "/avatar",
+    tags: ["Settings"],
+    summary: "Upload Avatar",
+    description: "Mengunggah avatar baru untuk pengguna. Terintegrasi dengan image filter AI dan Cloudflare R2 secara atomik.",
+    security: [{ Bearer: [] }],
+    request: {
+      body: {
+        content: {
+          "multipart/form-data": {
+            schema: z.object({
+              avatar: z.any().openapi({
+                type: "string",
+                format: "binary",
+                description: "File gambar (JPEG, PNG, WebP, GIF)",
+              }),
+            }),
+          },
+        },
+      },
+    },
+    responses: {
+      200: {
+        description: "Avatar berhasil diperbarui",
+        content: {
+          "application/json": {
+            schema: z.object({
+              data: z.object({
+                message: z.string(),
+                id: z.string(),
+                avatarUrl: z.string().nullable(),
+                updatedAt: z.string(),
+              }),
+            }),
+          },
+        },
+      },
+      400: {
+        description: "Bad Request (Tipe tidak valid, Terlalu besar, diblokir AI)",
+        content: { "application/json": { schema: ErrorResponseSchema } },
+      },
+      500: {
+        description: "Internal Server Error (R2 tidak dikonfigurasi, dll)",
+        content: { "application/json": { schema: ErrorResponseSchema } },
+      },
+    },
+  });
+
+  settingRoutes.openapi(avatarRoute, async (c: any) => {
+    const { settingService, imageFilter, audit } = makeServices(c, dialect);
+    const ip = getIp(c);
+    const userId = c.var.userId;
+
+    const contentType = c.req.header("content-type") ?? "";
+
+    if (contentType.includes("multipart/form-data")) {
+      if (!c.env.R2_PUBLIC) {
+        return c.json(
+          {
+            error: {
+              code: "R2_NOT_CONFIGURED",
+              message: "R2 bucket tidak dikonfigurasi",
+            },
+          },
+          500,
+        );
+      }
+
+      let formData: FormData;
+      try {
+        formData = await c.req.formData();
+      } catch {
+        return c.json(
+          {
+            error: {
+              code: "INVALID_FORM_DATA",
+              message: "Form data tidak valid",
+            },
+          },
+          400,
+        );
+      }
+
+      const rawFile = formData.get("avatar");
+      if (!rawFile || typeof rawFile === "string") {
+        return c.json(
+          { error: { code: "MISSING_FILE", message: "File avatar wajib diisi" } },
+          400,
+        );
+      }
+      const file = rawFile as unknown as File;
+
+      const MAX_SIZE = c.var.imageFilterConfig?.maxSizeBytes ?? 1 * 1024 * 1024;
+      if (file.size > MAX_SIZE) {
+        const maxMb = (MAX_SIZE / (1024 * 1024)).toFixed(1).replace(/\.0$/, "");
+        return c.json(
+          {
+            error: {
+              code: "FILE_TOO_LARGE",
+              message: `Ukuran file maksimal ${maxMb}MB`,
+            },
+          },
+          400,
+        );
+      }
+
+      const allowedTypes = ["image/jpeg", "image/png", "image/webp", "image/gif"];
+      if (!allowedTypes.includes(file.type)) {
+        return c.json(
+          {
+            error: {
+              code: "INVALID_FILE_TYPE",
+              message: "Format file harus JPEG, PNG, WebP, atau GIF",
+            },
+          },
+          400,
+        );
+      }
+
+      try {
+        await settingService.checkUserExists(userId);
+      } catch (err: any) {
+        return errorResponse(c, err);
+      }
+
+      const arrayBuffer = await file.arrayBuffer();
+
+      const filterResult = await imageFilter.isImageBufferAllowed(
+        arrayBuffer,
+        file.type,
+      );
+      if (!filterResult.allowed) {
+        audit.log({
+          event: "avatar_blocked",
+          userId,
+          ip,
+          metadata: { reason: filterResult.reason, source: "upload" },
+        });
+
+        return c.json(
+          {
+            error: {
+              code: "AVATAR_BLOCKED",
+              message:
+                filterResult.reason ??
+                "Avatar mengandung konten yang tidak diizinkan",
+            },
+          },
+          400,
+        );
+      }
+
+      const r2 = new R2UploadService(c.env.R2_PUBLIC, c.env.BUCKET_PUBLIC_URL);
+      const uploaded = await r2.upload(arrayBuffer, file.type, "auth/avatars");
+
+      try {
+        const { updated: result, oldAvatarUrl } =
+          await settingService.updateAvatarUrl(userId, uploaded.url);
+
+        if (oldAvatarUrl) {
+          await r2.deleteByUrl(oldAvatarUrl);
+        }
+
+        audit.log({
+          event: "avatar_updated",
+          userId,
+          ip,
+          metadata: { avatarUrl: uploaded.url, source: "upload" },
+        });
+
+        return c.json(
+          {
+            data: {
+              message: "Avatar berhasil diperbarui",
+              id: result.id,
+              avatarUrl: result.avatarUrl,
+              updatedAt: result.updatedAt instanceof Date ? result.updatedAt.toISOString() : new Date(result.updatedAt).toISOString(),
+            },
+          },
+          200,
+        );
+      } catch (err: any) {
+        await r2.deleteByUrl(uploaded.url);
+        return errorResponse(c, err);
+      }
+    }
+
+    return c.json(
+      {
+        error: {
+          code: "METHOD_NOT_ALLOWED",
+          message: "Update avatar via URL tidak lagi didukung. Silakan gunakan upload file.",
+        },
+      },
+      400,
+    );
+  });
+
+  // ── Delete Avatar ────────────────────────────────────────────────────────
+  const deleteAvatarRoute = createRoute({
+    method: "delete",
+    path: "/avatar",
+    tags: ["Settings"],
+    summary: "Delete Avatar",
+    description: "Menghapus avatar pengguna dan file fisiknya dari R2.",
+    security: [{ Bearer: [] }],
+    responses: {
+      200: {
+        description: "Avatar berhasil dihapus",
+        content: {
+          "application/json": {
+            schema: z.object({
+              data: z.object({
+                message: z.string(),
+                id: z.string(),
+                avatarUrl: z.null(),
+                updatedAt: z.string(),
+              }),
+            }),
+          },
+        },
+      },
+      401: {
+        description: "Unauthorized",
+        content: { "application/json": { schema: ErrorResponseSchema } },
+      },
+    },
+  });
+
+  settingRoutes.openapi(deleteAvatarRoute, async (c: any) => {
+    const { settingService, audit } = makeServices(c, dialect);
+    const userId = c.var.userId;
+    const ip = getIp(c);
+
+    try {
+      const result = await settingService.updateAvatarFromUrl(
+        userId,
+        null,
+        c.env.R2_PUBLIC,
+        c.env.BUCKET_PUBLIC_URL,
+      );
+
+      audit.log({
+        event: "avatar_deleted",
+        userId,
+        ip,
+      });
+
+      return c.json(
+        {
+          data: {
+            message: "Avatar berhasil dihapus",
+            id: result.id,
+            avatarUrl: null,
+            updatedAt: result.updatedAt instanceof Date ? result.updatedAt.toISOString() : new Date(result.updatedAt).toISOString(),
+          },
+        },
+        200,
+      );
+    } catch (err: any) {
+      return errorResponse(c, err);
+    }
+  });
+
+  // ── Proxy Avatar File ────────────────────────────────────────────────────
+  const getAvatarFileRoute = createRoute({
+    method: "get",
+    path: "/avatar-file/{path*}",
+    tags: ["Settings"],
+    summary: "Get Avatar File (Proxy)",
+    description: "Melakukan proxy ke bucket Cloudflare R2 jika pengguna tidak bisa mengakses public read CNAME.",
+    responses: {
+      200: {
+        description: "Gambar Avatar",
+      },
+      404: {
+        description: "File tidak ditemukan / Error",
+        content: { "application/json": { schema: ErrorResponseSchema } },
+      },
+    },
+  });
+
+  settingRoutes.openapi(getAvatarFileRoute, async (c: any) => {
+    if (!c.env.R2_PUBLIC) {
+      return c.json(
+        { error: { code: "NOT_FOUND", message: "File tidak ditemukan" } },
+        404,
+      );
+    }
+
+    const key = c.req.path
+      .replace(/^\/api\/settings\/avatar-file\//, "")
+      .replace(/^\/settings\/avatar-file\//, "")
+      .replace(/^\/avatar-file\//, "");
+
+    // Path traversal and character safety validation
+    if (!key || key.includes("..") || key.startsWith("/") || !/^[a-zA-Z0-9_\-\.\/]+$/.test(key)) {
+      return c.json(
+        { error: { code: "NOT_FOUND", message: "File tidak ditemukan" } },
+        404,
+      );
+    }
+
+    const object = await c.env.R2_PUBLIC.get(key);
+
+    if (!object) {
+      return c.json(
+        { error: { code: "NOT_FOUND", message: "File tidak ditemukan" } },
+        404,
+      );
+    }
+
+    const headers = new Headers();
+    headers.set("Content-Type", object.httpMetadata?.contentType ?? "image/jpeg");
+    headers.set("Cache-Control", "public, max-age=31536000");
+    if (object.etag) headers.set("ETag", object.etag);
+
+    return new Response(object.body, { headers });
+  });
+
+  return settingRoutes;
+}

@@ -1,12 +1,10 @@
 // src/services/google.service.ts
-//
-// Google OAuth service — handle web (Authorization Code) dan mobile (ID Token) flow.
-// Account linking: satu email bisa dipakai register manual + Google.
 
 import { eq, and } from "drizzle-orm";
-import { users, oauthAccounts } from "../db/schema";
+import { resolveUniqueUsername } from "../utils/username";
 import { fail } from "../utils/error";
-import type { DB } from "../db/client";
+import type { AnyAuthDB } from "../types/index";
+import { AuthDbAdapter, createAuthDbAdapter, type AuthDbDialect } from "../db/adapter";
 import type { AuthService } from "./auth.service";
 import type { IImageFilterService } from "../utils/image-filter";
 import type { ClientType } from "../config/token.config";
@@ -40,14 +38,28 @@ interface GoogleTokenInfoResponse {
 // ── Service ───────────────────────────────────────────────────────────────────
 
 export class GoogleOAuthService {
+  private readonly adapter: AuthDbAdapter;
+
   constructor(
-    private readonly db: DB,
+    dbOrAdapter: AnyAuthDB | AuthDbAdapter,
     private readonly authService: AuthService,
     private readonly imageFilter: IImageFilterService,
     private readonly clientId: string,
     private readonly clientSecret: string,
     private readonly bucketPublicUrl?: string,
-  ) {}
+    private readonly allowedClientIds?: string,
+    dialect: AuthDbDialect = "pg",
+  ) {
+    if ("dialect" in dbOrAdapter && "tables" in dbOrAdapter) {
+      this.adapter = dbOrAdapter;
+    } else {
+      this.adapter = createAuthDbAdapter(dbOrAdapter, dialect);
+    }
+  }
+
+  get db(): any {
+    return this.adapter.db;
+  }
 
   // ── Web Flow: Generate Authorization URL ─────────────────────────────────
 
@@ -109,8 +121,6 @@ export class GoogleOAuthService {
   }
 
   // ── Mobile Flow: Verify ID Token ─────────────────────────────────────────
-  // Mobile client (Expo) pakai Google Sign-In SDK yang menghasilkan idToken.
-  // Kita verify via Google tokeninfo endpoint.
 
   async verifyIdToken(idToken: string): Promise<GoogleUserInfo> {
     const response = await fetch(
@@ -127,12 +137,16 @@ export class GoogleOAuthService {
 
     const data = (await response.json()) as GoogleTokenInfoResponse;
 
-    // Cek audience — pastikan token ini ditujukan untuk app kita
-    if (data.aud !== this.clientId) {
+    const allowed = (this.allowedClientIds ?? "")
+      .split(",")
+      .map((id) => id.trim())
+      .filter(Boolean);
+    const validAudience = data.aud === this.clientId || allowed.includes(data.aud);
+
+    if (!validAudience) {
       fail("ID Token audience tidak sesuai", "GOOGLE_ID_TOKEN_INVALID_AUD");
     }
 
-    // Cek expiry
     if (data.exp && Date.now() / 1000 > parseInt(data.exp, 10)) {
       fail("ID Token sudah expired", "GOOGLE_ID_TOKEN_EXPIRED");
     }
@@ -147,8 +161,6 @@ export class GoogleOAuthService {
   }
 
   // ── Account Linking Logic ────────────────────────────────────────────────
-  // Satu method untuk semua flow (web & mobile).
-  // Return: JWT token pair + info apakah user baru atau existing.
 
   async handleGoogleLogin(
     googleUser: GoogleUserInfo,
@@ -170,49 +182,63 @@ export class GoogleOAuthService {
     }
 
     const email = googleUser.email.toLowerCase().trim();
+    const oauthAccountsTable = this.adapter.tables.oauthAccounts;
+    const usersTable = this.adapter.tables.users;
 
-    // 1. Cek apakah sudah ada oauth_account untuk Google sub ini
-    const existingOAuth = await this.db.query.oauthAccounts.findFirst({
-      where: and(
-        eq(oauthAccounts.provider, "google"),
-        eq(oauthAccounts.providerUserId, googleUser.sub),
-      ),
-    });
+    // 1. Cek apakah sudah ada oauth_account untuk Google sub ini (dengan single query JOIN ke users)
+    const [existing] = await this.db
+      .select({
+        oauth: oauthAccountsTable,
+        user: usersTable,
+      })
+      .from(oauthAccountsTable)
+      .innerJoin(usersTable, eq(usersTable.id, oauthAccountsTable.userId))
+      .where(
+        and(
+          eq(oauthAccountsTable.provider, "google"),
+          eq(oauthAccountsTable.providerUserId, googleUser.sub),
+        ),
+      )
+      .limit(1);
 
-    if (existingOAuth) {
-      // User sudah pernah login via Google — update profil terbaru
+    if (existing) {
+      const { oauth: existingOAuth, user: existUser } = existing;
+
+      if (!existUser || !existUser.isActive || existUser.deletedAt) {
+        fail("Akun telah dinonaktifkan", "ACCOUNT_DISABLED", 403);
+      }
+
+      const filteredAvatar = await this.imageFilter.filterImageUrl(
+        googleUser.picture,
+      );
+
       await this.db
-        .update(oauthAccounts)
+        .update(oauthAccountsTable)
         .set({
           email,
           displayName: googleUser.name ?? null,
-          avatarUrl: googleUser.picture ?? null,
+          avatarUrl: filteredAvatar,
           updatedAt: new Date(),
         })
-        .where(eq(oauthAccounts.id, existingOAuth.id));
+        .where(eq(oauthAccountsTable.id, existingOAuth.id));
 
-      // Update profil di users — termasuk username jika masih kosong
-      const existUser = await this.db.query.users.findFirst({
-        where: eq(users.id, existingOAuth.userId),
-        columns: { id: true, username: true, avatarUrl: true, fullName: true },
-      });
       const userUpdates: Record<string, any> = {
         updatedAt: new Date(),
       };
-      if (existUser) {
-        if (!existUser.username) {
-          userUpdates.username = await this.resolveUniqueUsername(
-            email.split("@")[0],
-          );
-        }
-        if (!existUser.fullName && googleUser.name) {
-          userUpdates.fullName = googleUser.name;
-        }
+      if (!existUser.username) {
+        userUpdates.username = await this.resolveUniqueUsername(
+          email.split("@")[0],
+        );
       }
-      await this.db
-        .update(users)
-        .set(userUpdates)
-        .where(eq(users.id, existingOAuth.userId));
+      if (!existUser.fullName && googleUser.name) {
+        userUpdates.fullName = googleUser.name;
+      }
+      if (Object.keys(userUpdates).length > 1) {
+        await this.db
+          .update(usersTable)
+          .set(userUpdates)
+          .where(eq(usersTable.id, existingOAuth.userId));
+      }
 
       const tokens = await this.authService.generateTokenPair(
         existingOAuth.userId,
@@ -226,41 +252,50 @@ export class GoogleOAuthService {
 
     // 2. Tidak ada oauth_account → cek apakah ada user dengan email yang sama
     const existingUser = await this.db.query.users.findFirst({
-      where: eq(users.email, email),
+      where: eq(usersTable.email, email),
     });
 
     if (existingUser) {
-      // User sudah daftar manual — LINK akun Google
-      if (!existingUser.isActive) {
+      if (!existingUser.isActive || existingUser.deletedAt) {
         fail("Akun telah dinonaktifkan", "ACCOUNT_DISABLED", 403);
       }
 
-      // Insert oauth_account link
-      await this.db.insert(oauthAccounts).values({
-        userId: existingUser.id,
-        provider: "google",
-        providerUserId: googleUser.sub,
-        email,
-        displayName: googleUser.name ?? null,
-        avatarUrl: googleUser.picture ?? null,
-      });
+      const filteredAvatar = await this.imageFilter.filterImageUrl(
+        googleUser.picture,
+      );
 
-      // Update user: set email verified (Google sudah verify), update avatar, update name, set username if null
-      const linkUpdates: Record<string, any> = {
-        isEmailVerified: true,
-        fullName: googleUser.name ?? existingUser.fullName ?? null,
-        avatarUrl: existingUser.avatarUrl,
-        updatedAt: new Date(),
-      };
+      let resolvedUsername: string | undefined;
       if (!existingUser.username) {
-        linkUpdates.username = await this.resolveUniqueUsername(
+        resolvedUsername = await this.resolveUniqueUsername(
           email.split("@")[0],
         );
       }
-      await this.db
-        .update(users)
-        .set(linkUpdates)
-        .where(eq(users.id, existingUser.id));
+
+      await this.db.transaction(async (tx: any) => {
+        await tx.insert(oauthAccountsTable).values({
+          userId: existingUser.id,
+          provider: "google",
+          providerUserId: googleUser.sub,
+          email,
+          displayName: googleUser.name ?? null,
+          avatarUrl: filteredAvatar,
+        });
+
+        const linkUpdates: Record<string, any> = {
+          isEmailVerified: true,
+          fullName: googleUser.name ?? existingUser.fullName ?? null,
+          avatarUrl: existingUser.avatarUrl,
+          updatedAt: new Date(),
+        };
+        if (resolvedUsername) {
+          linkUpdates.username = resolvedUsername;
+        }
+
+        await tx
+          .update(usersTable)
+          .set(linkUpdates)
+          .where(eq(usersTable.id, existingUser.id));
+      });
 
       const tokens = await this.authService.generateTokenPair(
         existingUser.id,
@@ -273,32 +308,31 @@ export class GoogleOAuthService {
     }
 
     // 3. User baru — create user + oauth_account (dalam transaction)
-    // Filter avatar URL melalui AI sebelum simpan
     const filteredAvatar = await this.imageFilter.filterImageUrl(
       googleUser.picture,
     );
-    const newUsername = await this.resolveUniqueUsername(email.split("@")[0]);
-    const newUser = await this.db.transaction(async (tx) => {
+
+    const newUser = await this.db.transaction(async (tx: any) => {
+      const newUsername = await this.resolveUniqueUsername(email.split("@")[0]);
       const [created] = await tx
-        .insert(users)
+        .insert(usersTable)
         .values({
           email,
           username: newUsername,
-          password: null, // OAuth-only user, no password
+          password: null,
           fullName: googleUser.name ?? email.split("@")[0],
           avatarUrl: filteredAvatar,
-          isEmailVerified: true, // Google sudah verify email
+          isEmailVerified: true,
           isActive: true,
         })
-        .returning({ id: users.id });
+        .returning({ id: usersTable.id });
 
-      await tx.insert(oauthAccounts).values({
+      await tx.insert(oauthAccountsTable).values({
         userId: created.id,
         provider: "google",
         providerUserId: googleUser.sub,
         email,
         displayName: googleUser.name ?? null,
-        // Simpan filteredAvatar (sudah di-filter AI) agar konsisten dengan users.avatarUrl
         avatarUrl: filteredAvatar,
       });
 
@@ -315,20 +349,7 @@ export class GoogleOAuthService {
     return { ...tokens, isNewUser: true, linked: false };
   }
 
-  // ── Resolve Unique Username ──────────────────────────────────────────────
-  // Jika username sudah dipakai, kurangi 1 karakter dari belakang sampai unik.
-
   private async resolveUniqueUsername(base: string): Promise<string> {
-    let candidate = base;
-    while (candidate.length > 0) {
-      const existing = await this.db.query.users.findFirst({
-        where: eq(users.username, candidate),
-        columns: { id: true },
-      });
-      if (!existing) return candidate;
-      candidate = candidate.slice(0, -1);
-    }
-    // Fallback: gunakan UUID jika semua trimmed versions sudah terpakai
-    return crypto.randomUUID().slice(0, 8);
+    return resolveUniqueUsername(this.adapter, base);
   }
 }

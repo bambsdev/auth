@@ -8,7 +8,6 @@ import {
   authRoutes,
   settingRoutes,
   dbMiddleware,
-  customLogger,
   authMiddleware,
   ImageFilterService,
   users,
@@ -23,7 +22,8 @@ import {
   logoutSchema,
   updateProfileSchema,
   changePasswordSchema,
-  updateAvatarSchema
+  updateAvatarSchema,
+  resetPasswordSchema,
 } from "../src/index";
 
 // ── Test: All Exports Exist ───────────────────────────────────────────────────
@@ -44,10 +44,6 @@ describe("Package Exports", () => {
     expect(typeof dbMiddleware).toBe("function");
   });
 
-  test("customLogger is exported", () => {
-    expect(customLogger).toBeDefined();
-    expect(typeof customLogger).toBe("function");
-  });
 
   test("authMiddleware is exported", () => {
     expect(authMiddleware).toBeDefined();
@@ -192,6 +188,29 @@ describe("Validation Schemas", () => {
     });
     expect(result.success).toBe(false);
   });
+
+  test("resetPasswordSchema validates 64-char hex token", () => {
+    const validToken = "a".repeat(64);
+    const result = resetPasswordSchema.safeParse({
+      token: validToken,
+      newPassword: "NewPassword123",
+    });
+    expect(result.success).toBe(true);
+  });
+
+  test("resetPasswordSchema rejects invalid token length and non-hex characters", () => {
+    const shortResult = resetPasswordSchema.safeParse({
+      token: "short-token",
+      newPassword: "NewPassword123",
+    });
+    expect(shortResult.success).toBe(false);
+
+    const nonHexResult = resetPasswordSchema.safeParse({
+      token: "z".repeat(64),
+      newPassword: "NewPassword123",
+    });
+    expect(nonHexResult.success).toBe(false);
+  });
 });
 
 // ── Test: parseBody Helper ────────────────────────────────────────────────────
@@ -219,4 +238,29 @@ describe("parseBody Helper", () => {
       expect(err.status).toBe(400);
     }
   });
+});
+
+// ── Test: AuditService Null Guard ─────────────────────────────────────────────
+
+describe("AuditService", () => {
+  test("AuditService does not throw when analytics binding is undefined", () => {
+    const { AuditService } = require("../src/services/audit.service");
+    const audit = new AuditService(undefined);
+    expect(() => {
+      audit.log({ event: "login_success", ip: "127.0.0.1" });
+    }).not.toThrow();
+  });
+});
+
+// ── Test: Password Utility & Timing Safety ────────────────────────────────────
+
+describe("Password Verification", () => {
+  test("verifyPassword succeeds for valid password and fails for invalid", async () => {
+    const { hashPassword, verifyPassword } = require("../src/utils/password");
+    const hash = await hashPassword("MySecretPass123");
+    expect(await verifyPassword("MySecretPass123", hash)).toBe(true);
+    expect(await verifyPassword("WrongPassword123", hash)).toBe(false);
+    expect(await verifyPassword("MySecretPass123", "invalid-format")).toBe(false);
+    expect(await verifyPassword("MySecretPass123", "salt:short")).toBe(false);
+  }, 15000);
 });

@@ -2,12 +2,13 @@
 
 import { sign, verify } from "hono/jwt";
 import { eq, and, gt } from "drizzle-orm";
-import { users, refreshTokens } from "../db/schema";
 import { verifyPassword } from "../utils/password";
 import { hashToken } from "../utils/hash";
+import { resolveUniqueUsername } from "../utils/username";
 import { fail } from "../utils/error";
 import { TOKEN_POLICY } from "../config/token.config";
-import type { DB } from "../db/client";
+import type { AnyAuthDB } from "../types/index";
+import { AuthDbAdapter, createAuthDbAdapter, type AuthDbDialect } from "../db/adapter";
 import type { CacheService } from "./cache.service";
 import type { ClientType } from "../config/token.config";
 import type { JWTAccessPayload, JWTRefreshPayload } from "../types/index";
@@ -18,12 +19,25 @@ const uuid = () => crypto.randomUUID();
 // ── Service ───────────────────────────────────────────────────────────────────
 
 export class AuthService {
+  readonly adapter: AuthDbAdapter;
+
   constructor(
-    private readonly db: DB,
+    dbOrAdapter: AnyAuthDB | AuthDbAdapter,
     private readonly cacheService: CacheService,
     private readonly jwtSecret: string,
     private readonly jwtRefresh: string,
-  ) {}
+    dialect: AuthDbDialect = "pg",
+  ) {
+    if ("dialect" in dbOrAdapter && "tables" in dbOrAdapter) {
+      this.adapter = dbOrAdapter;
+    } else {
+      this.adapter = createAuthDbAdapter(dbOrAdapter, dialect);
+    }
+  }
+
+  get db(): any {
+    return this.adapter.db;
+  }
 
   // ── Login ─────────────────────────────────────────────────────────────────
 
@@ -33,11 +47,12 @@ export class AuthService {
     clientType: ClientType,
     deviceInfo?: Record<string, string>,
   ) {
+    const usersTable = this.adapter.tables.users;
     const user = await this.db.query.users.findFirst({
-      where: eq(users.email, email.toLowerCase().trim()),
+      where: eq(usersTable.email, email.toLowerCase().trim()),
     });
 
-    if (!user || !user.isActive)
+    if (!user || !user.isActive || user.deletedAt)
       fail("Email atau password salah", "INVALID_CREDENTIALS");
 
     // Cek email sudah diverifikasi
@@ -58,16 +73,16 @@ export class AuthService {
     // Auto-populate username & fullName dari email jika masih kosong
     if (!user.username || !user.fullName) {
       const derived = email.split("@")[0];
-      const updates: Record<string, string> = {};
+      const updates: Record<string, any> = {};
       if (!user.fullName) updates.fullName = derived;
       if (!user.username) {
         updates.username = await this.resolveUniqueUsername(derived);
       }
       if (Object.keys(updates).length > 0) {
         await this.db
-          .update(users)
+          .update(usersTable)
           .set({ ...updates, updatedAt: new Date() })
-          .where(eq(users.id, user.id));
+          .where(eq(usersTable.id, user.id));
       }
     }
 
@@ -75,17 +90,16 @@ export class AuthService {
   }
 
   // ── Generate Token Pair ───────────────────────────────────────────────────
-  // Parameter `txOrDb` opsional: jika dipanggil dari dalam transaction,
-  // gunakan `tx` agar INSERT masuk dalam transaksi yang sama.
 
   async generateTokenPair(
     userId: string,
     clientType: ClientType,
     familyId?: string,
     deviceInfo?: Record<string, string>,
-    txOrDb?: DB,
+    txOrDb?: any,
   ) {
     const conn = txOrDb ?? this.db;
+    const refreshTokensTable = this.adapter.tables.refreshTokens;
     const policy = TOKEN_POLICY[clientType];
     const now = Math.floor(Date.now() / 1000);
     const family = familyId ?? uuid();
@@ -118,8 +132,8 @@ export class AuthService {
       this.jwtRefresh,
     );
 
-    // Simpan hash refresh token ke PostgreSQL
-    await conn.insert(refreshTokens).values({
+    // Simpan hash refresh token ke database
+    await conn.insert(refreshTokensTable).values({
       userId,
       tokenHash: await hashToken(refreshToken),
       clientType,
@@ -165,8 +179,6 @@ export class AuthService {
   }
 
   // ── Rotate Refresh Token ──────────────────────────────────────────────────
-  // Dibungkus dalam transaction atomic + SELECT FOR UPDATE untuk mencegah
-  // race condition saat request concurrent spam rotate token.
 
   async rotateRefreshToken(rawRefreshToken: string) {
     let payload: JWTRefreshPayload;
@@ -185,38 +197,32 @@ export class AuthService {
       fail("Tipe token salah", "INVALID_TOKEN_TYPE");
 
     const hash = await hashToken(rawRefreshToken);
+    const refreshTokensTable = this.adapter.tables.refreshTokens;
 
-    // ── Transaction atomic ─────────────────────────────────────────────────
-    // SELECT FOR UPDATE mengunci row sehingga request concurrent harus antri.
-    // Ini mencegah dua request membaca token sebagai "belum revoked" bersamaan.
-    //
-    // PENTING: Jangan throw error di dalam transaction callback!
-    // Drizzle akan ROLLBACK transaksi jika callback throw, sehingga
-    // UPDATE revoke-family akan dibatalkan. Gunakan return value sebagai sinyal.
-
-    const result = await this.db.transaction(async (tx) => {
-      // Cari token dengan row-level lock
-      const [existing] = await tx
-        .select()
-        .from(refreshTokens)
-        .where(eq(refreshTokens.tokenHash, hash))
-        .for("update");
+    const result = await this.db.transaction(async (tx: any) => {
+      // Cari token dengan lock jika didukung dialek
+      const [existing] = await this.adapter.selectWithLock(
+        tx,
+        refreshTokensTable,
+        eq(refreshTokensTable.tokenHash, hash),
+      );
 
       if (!existing) {
         // Hash tidak ditemukan — cek apakah family masih ada
-        const [familyExists] = await tx
-          .select({ id: refreshTokens.id })
-          .from(refreshTokens)
-          .where(eq(refreshTokens.familyId, payload!.familyId))
-          .for("update")
-          .limit(1);
+        const [familyExists] = await this.adapter.selectWithLock(
+          tx,
+          refreshTokensTable,
+          eq(refreshTokensTable.familyId, payload!.familyId),
+          { id: refreshTokensTable.id },
+          1,
+        );
 
         if (familyExists) {
           // Family ada tapi token ini tidak dikenal → REUSE ATTACK
           await tx
-            .update(refreshTokens)
+            .update(refreshTokensTable)
             .set({ isRevoked: true })
-            .where(eq(refreshTokens.familyId, payload!.familyId));
+            .where(eq(refreshTokensTable.familyId, payload!.familyId));
           return { reuse: true as const };
         }
         return { notFound: true as const };
@@ -225,19 +231,20 @@ export class AuthService {
       if (existing.isRevoked) {
         // Token sudah di-revoke sebelumnya → REUSE ATTACK
         await tx
-          .update(refreshTokens)
+          .update(refreshTokensTable)
           .set({ isRevoked: true })
-          .where(eq(refreshTokens.familyId, existing.familyId));
+          .where(eq(refreshTokensTable.familyId, existing.familyId));
         return { reuse: true as const };
       }
 
-      if (existing.expiresAt < new Date()) return { expired: true as const };
+      const expiresAt = existing.expiresAt instanceof Date ? existing.expiresAt : new Date(existing.expiresAt);
+      if (expiresAt < new Date()) return { expired: true as const };
 
       // Revoke token lama (di dalam transaksi)
       await tx
-        .update(refreshTokens)
+        .update(refreshTokensTable)
         .set({ isRevoked: true, lastUsedAt: new Date() })
-        .where(eq(refreshTokens.id, existing.id));
+        .where(eq(refreshTokensTable.id, existing.id));
 
       // Generate token pair baru — INSERT juga di dalam transaksi
       const tokens = await this.generateTokenPair(
@@ -245,14 +252,11 @@ export class AuthService {
         existing.clientType as ClientType,
         existing.familyId,
         undefined,
-        tx as unknown as DB,
+        tx,
       );
 
       return { tokens };
     });
-
-    // ── Post-transaction: throw errors SETELAH commit ─────────────────────
-    // Dengan begini, UPDATE revoke-family sudah ter-commit dan tidak rollback.
 
     if ("reuse" in result)
       fail(
@@ -280,16 +284,17 @@ export class AuthService {
       await this.cacheService.blacklistToken(jti, remaining);
     }
 
-    // Revoke refresh token di PostgreSQL
+    // Revoke refresh token di database
     if (rawRefreshToken) {
       const hash = await hashToken(rawRefreshToken);
+      const refreshTokensTable = this.adapter.tables.refreshTokens;
       await this.db
-        .update(refreshTokens)
+        .update(refreshTokensTable)
         .set({ isRevoked: true })
         .where(
           and(
-            eq(refreshTokens.tokenHash, hash),
-            eq(refreshTokens.isRevoked, false),
+            eq(refreshTokensTable.tokenHash, hash),
+            eq(refreshTokensTable.isRevoked, false),
           ),
         );
     }
@@ -298,15 +303,14 @@ export class AuthService {
   // ── Logout All Devices ────────────────────────────────────────────────────
 
   async logoutAll(userId: string): Promise<void> {
-    // Revoke semua refresh token milik user ini di PostgreSQL.
-    // Access token aktif akan expire sendiri (max 1 jam).
+    const refreshTokensTable = this.adapter.tables.refreshTokens;
     await this.db
-      .update(refreshTokens)
+      .update(refreshTokensTable)
       .set({ isRevoked: true })
       .where(
         and(
-          eq(refreshTokens.userId, userId),
-          eq(refreshTokens.isRevoked, false),
+          eq(refreshTokensTable.userId, userId),
+          eq(refreshTokensTable.isRevoked, false),
         ),
       );
   }
@@ -314,11 +318,12 @@ export class AuthService {
   // ── List Active Sessions ──────────────────────────────────────────────────
 
   async getSessions(userId: string, currentFamilyId?: string) {
+    const refreshTokensTable = this.adapter.tables.refreshTokens;
     const sessions = await this.db.query.refreshTokens.findMany({
       where: and(
-        eq(refreshTokens.userId, userId),
-        eq(refreshTokens.isRevoked, false),
-        gt(refreshTokens.expiresAt, new Date()),
+        eq(refreshTokensTable.userId, userId),
+        eq(refreshTokensTable.isRevoked, false),
+        gt(refreshTokensTable.expiresAt, new Date()),
       ),
       columns: {
         id: true,
@@ -327,54 +332,53 @@ export class AuthService {
         createdAt: true,
         lastUsedAt: true,
         expiresAt: true,
-        familyId: true, // Ambil familyId untuk pencocokan internal
+        familyId: true,
         tokenHash: false,
       },
     });
 
-    return sessions.map((s) => ({
-      id: s.id,
-      clientType: s.clientType,
-      deviceInfo: s.deviceInfo,
-      createdAt: s.createdAt,
-      lastUsedAt: s.lastUsedAt,
-      expiresAt: s.expiresAt,
-      isCurrent: currentFamilyId ? s.familyId === currentFamilyId : false,
-    }));
+    return sessions.map((s: any) => {
+      let parsedDeviceInfo = s.deviceInfo ?? null;
+      if (typeof s.deviceInfo === "string") {
+        try {
+          parsedDeviceInfo = JSON.parse(s.deviceInfo);
+        } catch {
+          parsedDeviceInfo = null;
+        }
+      }
+
+      return {
+        id: s.id,
+        clientType: s.clientType,
+        deviceInfo: parsedDeviceInfo,
+        createdAt: s.createdAt,
+        lastUsedAt: s.lastUsedAt,
+        expiresAt: s.expiresAt,
+        isCurrent: currentFamilyId ? s.familyId === currentFamilyId : false,
+      };
+    });
   }
 
   // ── Revoke Specific Session ───────────────────────────────────────────────
 
   async revokeSession(sessionId: string, userId: string): Promise<boolean> {
+    const refreshTokensTable = this.adapter.tables.refreshTokens;
     const result = await this.db
-      .update(refreshTokens)
+      .update(refreshTokensTable)
       .set({ isRevoked: true })
       .where(
         and(
-          eq(refreshTokens.id, sessionId),
-          eq(refreshTokens.userId, userId), // pastikan milik user ini
-          eq(refreshTokens.isRevoked, false),
+          eq(refreshTokensTable.id, sessionId),
+          eq(refreshTokensTable.userId, userId),
+          eq(refreshTokensTable.isRevoked, false),
         ),
       )
-      .returning({ id: refreshTokens.id });
+      .returning({ id: refreshTokensTable.id });
 
     return result.length > 0;
   }
 
-  // ── Resolve Unique Username ──────────────────────────────────────────────
-  // Jika username sudah dipakai, kurangi 1 karakter dari belakang sampai unik.
-
   async resolveUniqueUsername(base: string): Promise<string> {
-    let candidate = base;
-    while (candidate.length > 0) {
-      const existing = await this.db.query.users.findFirst({
-        where: eq(users.username, candidate),
-        columns: { id: true },
-      });
-      if (!existing) return candidate;
-      candidate = candidate.slice(0, -1);
-    }
-    // Fallback: gunakan UUID jika semua trimmed versions sudah terpakai
-    return crypto.randomUUID().slice(0, 8);
+    return resolveUniqueUsername(this.adapter, base);
   }
 }

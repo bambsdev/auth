@@ -1,39 +1,57 @@
 // src/index.ts
 //
-// Barrel export — @bambsdev/auth
-// Consumer apps import everything from this single entry point.
+// Root barrel export — @bambsdev/auth
+// Shared utilities, types, and backward-compatible exports.
 
-// ── Utils (reusable) ──────────────────────────────────────────────────────────
+// ── Utils & Services ──────────────────────────────────────────────────────────
 export { ImageFilterService } from "./utils/image-filter";
 export type { ImageFilterConfig, IImageFilterService } from "./utils/image-filter";
 export * from "./utils/validation";
-export { parseBody } from "./utils/validation";
+export { R2UploadService, extractR2KeyFromUrl } from "./services/r2-upload.service";
+export { CacheService } from "./services/cache.service";
+export { AuditService } from "./services/audit.service";
+export { EmailService } from "./services/email.service";
+export { AuthService } from "./services/auth.service";
+export { RegisterService } from "./services/register.service";
+export { VerificationService } from "./services/verification.service";
+export { PasswordResetService } from "./services/password-reset.service";
+export { SettingService } from "./services/setting.service";
+export { GoogleOAuthService } from "./services/google.service";
+export {
+  cleanupExpiredTokens,
+  cleanupExpiredPasswordResets,
+  cleanupExpiredEmailVerifications,
+  cleanupExpiredTokensD1,
+  cleanupExpiredPasswordResetsD1,
+  cleanupExpiredEmailVerificationsD1,
+} from "./services/token.service";
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// ── DB Adapters & Types ───────────────────────────────────────────────────────
+export { createAuthDbAdapter, PgAuthDbAdapter, D1AuthDbAdapter } from "./db/adapter";
+export type { AuthDbAdapter, AuthDbDialect, AnyTableSchema } from "./db/adapter";
+
 export type {
-  Bindings as AuthBindings,
-  Variables as AuthVariables,
+  SharedAuthBindings,
+  PgBindings,
+  D1Bindings,
+  PgBindings as AuthBindings,
+  PgVariables as AuthVariables,
+  Bindings,
+  Variables,
+  PgDB,
+  D1DB,
+  AnyAuthDB,
+  PgDB as DB,
   JWTAccessPayload,
   JWTRefreshPayload,
   AuditEvent,
   EmailConfig,
 } from "./types/index";
 
-// ── DB Schema (consumer needs this for drizzle migrations) ────────────────────
-export * as schema from "./db/schema";
-export * from "./db/schema";
-export { createDb } from "./db/client";
-export type { DB } from "./db/client";
-
-// ── Middleware ─────────────────────────────────────────────────────────────────
-export { dbMiddleware } from "./db/client";
-export { customLogger } from "./utils/logger";
+// ── Backward Compatible Re-exports (PostgreSQL default) ───────────────────────
+export * as schema from "./db/pg/schema";
+export * from "./db/pg/schema";
+export { createDb, dbMiddleware } from "./db/pg/client";
 export { authMiddleware } from "./middleware/auth.middleware";
-
-// ── Services ──────────────────────────────────────────────────────────────────
-export { cleanupExpiredTokens, cleanupExpiredPasswordResets, cleanupExpiredEmailVerifications } from "./services/token.service";
-export { R2UploadService, extractR2KeyFromUrl } from "./services/r2-upload.service";
-
-// ── Routes ────────────────────────────────────────────────────────────────────
-export { authRoutes } from "./routes/index";
-export { settingRoutes } from "./routes/setting.routes";
+export { authRoutes } from "./routes/pg/index";
+export { settingRoutes } from "./routes/pg/setting";

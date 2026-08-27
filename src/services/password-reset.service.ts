@@ -1,16 +1,11 @@
 // src/services/password-reset.service.ts
-//
-// Mengelola pembuatan & verifikasi token reset password.
-// Token: 32-byte random hex, disimpan sebagai SHA-256 hash di DB.
-// TTL: 15 menit, single-use.
-// Setelah password direset → semua refresh token di-revoke (force re-login).
 
-import { eq, and } from "drizzle-orm";
-import { users, refreshTokens, passwordResets } from "../db/schema";
+import { eq, and, isNull } from "drizzle-orm";
 import { hashPassword } from "../utils/password";
 import { hashToken } from "../utils/hash";
 import { fail } from "../utils/error";
-import type { DB } from "../db/client";
+import type { AnyAuthDB } from "../types/index";
+import { AuthDbAdapter, createAuthDbAdapter, type AuthDbDialect } from "../db/adapter";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const RESET_TTL_MINUTES = 15;
@@ -28,20 +23,46 @@ function generateToken(): string {
 // ── Service ───────────────────────────────────────────────────────────────────
 
 export class PasswordResetService {
-  constructor(private readonly db: DB) {}
+  private readonly adapter: AuthDbAdapter;
+
+  constructor(
+    dbOrAdapter: AnyAuthDB | AuthDbAdapter,
+    dialect: AuthDbDialect = "pg",
+  ) {
+    if ("dialect" in dbOrAdapter && "tables" in dbOrAdapter) {
+      this.adapter = dbOrAdapter;
+    } else {
+      this.adapter = createAuthDbAdapter(dbOrAdapter, dialect);
+    }
+  }
+
+  get db(): any {
+    return this.adapter.db;
+  }
 
   /**
    * Buat reset token untuk user.
    * Return plain token (untuk dikirim via email).
    */
   async createResetToken(userId: string): Promise<string> {
+    const passwordResetsTable = this.adapter.tables.passwordResets;
     const token = generateToken();
     const tokenHash = await hashToken(token);
     const expiresAt = new Date(
       Date.now() + RESET_TTL_MINUTES * 60 * 1000,
     );
 
-    await this.db.insert(passwordResets).values({
+    // Invalidate/hapus reset token lama yang belum digunakan untuk user ini
+    await (this.db as any)
+      .delete(passwordResetsTable)
+      .where(
+        and(
+          eq(passwordResetsTable.userId, userId),
+          isNull(passwordResetsTable.usedAt),
+        ),
+      );
+
+    await (this.db as any).insert(passwordResetsTable).values({
       userId,
       tokenHash,
       expiresAt,
@@ -56,22 +77,18 @@ export class PasswordResetService {
    */
   async findUserByEmail(email: string): Promise<string | null> {
     const normalizedEmail = email.toLowerCase().trim();
+    const usersTable = this.adapter.tables.users;
     const user = await this.db.query.users.findFirst({
-      where: eq(users.email, normalizedEmail),
-      columns: { id: true, isActive: true },
+      where: eq(usersTable.email, normalizedEmail),
+      columns: { id: true, isActive: true, deletedAt: true },
     });
 
-    if (!user || !user.isActive) return null;
+    if (!user || !user.isActive || user.deletedAt) return null;
     return user.id;
   }
 
   /**
    * Reset password menggunakan token.
-   * - Verify token valid, belum dipakai, belum expired
-   * - Hash password baru
-   * - Update user password
-   * - Revoke semua refresh token (force re-login)
-   * - Tandai token sebagai used
    */
   async resetPassword(
     token: string,
@@ -79,20 +96,23 @@ export class PasswordResetService {
   ): Promise<{ userId: string; email: string }> {
     const tokenHash = await hashToken(token);
     const hashedPassword = await hashPassword(newPassword);
+    const passwordResetsTable = this.adapter.tables.passwordResets;
+    const usersTable = this.adapter.tables.users;
+    const refreshTokensTable = this.adapter.tables.refreshTokens;
 
-    return this.db.transaction(async (tx) => {
-      // Cari token yang valid dengan row lock
-      const [record] = await tx
-        .select({
-          id: passwordResets.id,
-          userId: passwordResets.userId,
-          expiresAt: passwordResets.expiresAt,
-          usedAt: passwordResets.usedAt,
-        })
-        .from(passwordResets)
-        .where(eq(passwordResets.tokenHash, tokenHash))
-        .for("update")
-        .limit(1);
+    return this.db.transaction(async (tx: any) => {
+      const [record] = await this.adapter.selectWithLock(
+        tx,
+        passwordResetsTable,
+        eq(passwordResetsTable.tokenHash, tokenHash),
+        {
+          id: passwordResetsTable.id,
+          userId: passwordResetsTable.userId,
+          expiresAt: passwordResetsTable.expiresAt,
+          usedAt: passwordResetsTable.usedAt,
+        },
+        1,
+      );
 
       if (!record) {
         fail("Token reset tidak valid", "INVALID_RESET_TOKEN", 401);
@@ -102,38 +122,39 @@ export class PasswordResetService {
         fail("Token reset sudah digunakan", "RESET_TOKEN_USED", 401);
       }
 
-      if (record.expiresAt < new Date()) {
+      const expiresAt = record.expiresAt instanceof Date ? record.expiresAt : new Date(record.expiresAt);
+      if (expiresAt < new Date()) {
         fail("Token reset sudah expired", "RESET_TOKEN_EXPIRED", 401);
       }
 
       // Tandai token sebagai used
       await tx
-        .update(passwordResets)
+        .update(passwordResetsTable)
         .set({ usedAt: new Date() })
-        .where(eq(passwordResets.id, record.id));
+        .where(eq(passwordResetsTable.id, record.id));
 
       // Update password user
       await tx
-        .update(users)
+        .update(usersTable)
         .set({ password: hashedPassword, updatedAt: new Date() })
-        .where(eq(users.id, record.userId));
+        .where(eq(usersTable.id, record.userId));
 
       // Revoke semua refresh token (force re-login di semua device)
       await tx
-        .update(refreshTokens)
+        .update(refreshTokensTable)
         .set({ isRevoked: true })
         .where(
           and(
-            eq(refreshTokens.userId, record.userId),
-            eq(refreshTokens.isRevoked, false),
+            eq(refreshTokensTable.userId, record.userId),
+            eq(refreshTokensTable.isRevoked, false),
           ),
         );
 
       // Ambil email user untuk response / audit
       const [user] = await tx
-        .select({ id: users.id, email: users.email })
-        .from(users)
-        .where(eq(users.id, record.userId))
+        .select({ id: usersTable.id, email: usersTable.email })
+        .from(usersTable)
+        .where(eq(usersTable.id, record.userId))
         .limit(1);
 
       return { userId: user.id, email: user.email };

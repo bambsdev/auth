@@ -36,6 +36,7 @@ export const authMiddleware = createMiddleware<{
     const payload = await authService.validateAccessToken(token);
     c.set("userId", payload.sub);
     c.set("jti", payload.jti);
+    c.set("exp", payload.exp);
     c.set("clientType", payload.client);
   } catch (err: any) {
     return c.json(

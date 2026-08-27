@@ -1,14 +1,11 @@
 // src/services/setting.service.ts
-//
-// Setting service — update profile, change password, update avatar.
-// Password change → revoke semua refresh token (force re-login).
 
 import { eq, and } from "drizzle-orm";
-import { users, refreshTokens } from "../db/schema";
 import { hashPassword, verifyPassword } from "../utils/password";
 import { fail } from "../utils/error";
 import { extractR2KeyFromUrl } from "./r2-upload.service";
-import type { DB } from "../db/client";
+import type { AnyAuthDB } from "../types/index";
+import { AuthDbAdapter, createAuthDbAdapter, type AuthDbDialect } from "../db/adapter";
 import type { IImageFilterService } from "../utils/image-filter";
 import type { AuthService } from "./auth.service";
 import type { ClientType } from "../config/token.config";
@@ -16,17 +13,31 @@ import type { ClientType } from "../config/token.config";
 // ── Service ───────────────────────────────────────────────────────────────────
 
 export class SettingService {
+  private readonly adapter: AuthDbAdapter;
+
   constructor(
-    private readonly db: DB,
+    dbOrAdapter: AnyAuthDB | AuthDbAdapter,
     private readonly authService: AuthService,
     private readonly imageFilter: IImageFilterService,
-  ) {}
+    dialect: AuthDbDialect = "pg",
+  ) {
+    if ("dialect" in dbOrAdapter && "tables" in dbOrAdapter) {
+      this.adapter = dbOrAdapter;
+    } else {
+      this.adapter = createAuthDbAdapter(dbOrAdapter, dialect);
+    }
+  }
+
+  get db(): any {
+    return this.adapter.db;
+  }
 
   // ── Get Profile ──────────────────────────────────────────────────────────
 
   async getProfile(userId: string) {
-    const user = await this.db.query.users.findFirst({
-      where: eq(users.id, userId),
+    const usersTable = this.adapter.tables.users;
+    const user = await (this.db as any).query.users.findFirst({
+      where: eq(usersTable.id, userId),
       columns: {
         id: true,
         email: true,
@@ -34,6 +45,7 @@ export class SettingService {
         fullName: true,
         avatarUrl: true,
         isEmailVerified: true,
+        password: true,
         createdAt: true,
         updatedAt: true,
       },
@@ -41,15 +53,10 @@ export class SettingService {
 
     if (!user) fail("User tidak ditemukan", "USER_NOT_FOUND", 404);
 
-    // Cek apakah user punya password (untuk UI: show/hide current password field)
-    const fullUser = await this.db.query.users.findFirst({
-      where: eq(users.id, userId),
-      columns: { password: true },
-    });
-
+    const { password, ...rest } = user;
     return {
-      ...user,
-      hasPassword: !!fullUser?.password,
+      ...rest,
+      hasPassword: !!password,
     };
   }
 
@@ -59,12 +66,14 @@ export class SettingService {
     userId: string,
     data: { username?: string; fullName?: string },
   ) {
+    const usersTable = this.adapter.tables.users;
     const updates: Record<string, any> = { updatedAt: new Date() };
 
-    // Validasi username uniqueness
+    // Validasi username uniqueness (case-insensitive)
     if (data.username !== undefined) {
+      const normalizedUsername = data.username.toLowerCase().trim();
       const existing = await this.db.query.users.findFirst({
-        where: eq(users.username, data.username),
+        where: eq(usersTable.username, normalizedUsername),
         columns: { id: true },
       });
 
@@ -72,7 +81,7 @@ export class SettingService {
         fail("Username sudah dipakai", "USERNAME_TAKEN", 409);
       }
 
-      updates.username = data.username;
+      updates.username = normalizedUsername;
     }
 
     if (data.fullName !== undefined) {
@@ -89,22 +98,20 @@ export class SettingService {
     }
 
     const [updated] = await this.db
-      .update(users)
+      .update(usersTable)
       .set(updates)
-      .where(eq(users.id, userId))
+      .where(eq(usersTable.id, userId))
       .returning({
-        id: users.id,
-        username: users.username,
-        fullName: users.fullName,
-        updatedAt: users.updatedAt,
+        id: usersTable.id,
+        username: usersTable.username,
+        fullName: usersTable.fullName,
+        updatedAt: usersTable.updatedAt,
       });
 
     return updated;
   }
 
   // ── Change Password ──────────────────────────────────────────────────────
-  // Setelah password berubah, revoke semua refresh token → force re-login.
-  // Return token pair baru untuk sesi saat ini.
 
   async changePassword(
     userId: string,
@@ -112,24 +119,21 @@ export class SettingService {
     clientType: ClientType,
     deviceInfo?: Record<string, string>,
   ) {
-    // Hash password baru SEBELUM transaction (CPU-intensive, jangan di dalam lock)
     const hashedPassword = await hashPassword(data.newPassword);
+    const usersTable = this.adapter.tables.users;
+    const refreshTokensTable = this.adapter.tables.refreshTokens;
 
-    // ── Transaction atomic + SELECT FOR UPDATE ──────────────────────────────
-    // Lock row user untuk mencegah race condition saat spam endpoint.
-    // Semua validasi password dilakukan DI DALAM lock sehingga request concurrent
-    // harus antri dan tidak bisa mem-bypass verifikasi.
-    const result = await this.db.transaction(async (tx) => {
-      // Lock row user
-      const [user] = await tx
-        .select({ id: users.id, password: users.password })
-        .from(users)
-        .where(eq(users.id, userId))
-        .for("update");
+    const result = await this.db.transaction(async (tx: any) => {
+      const [user] = await this.adapter.selectWithLock(
+        tx,
+        usersTable,
+        eq(usersTable.id, userId),
+        { id: usersTable.id, password: usersTable.password },
+        1,
+      );
 
       if (!user) return { error: "USER_NOT_FOUND" as const };
 
-      // Jika user sudah punya password, wajib verify current password
       if (user.password) {
         if (!data.currentPassword) {
           return { error: "CURRENT_PASSWORD_REQUIRED" as const };
@@ -139,30 +143,30 @@ export class SettingService {
         if (!valid) {
           return { error: "INVALID_CURRENT_PASSWORD" as const };
         }
+
+        if (data.currentPassword === data.newPassword) {
+          return { error: "PASSWORD_UNCHANGED" as const };
+        }
       }
-      // Jika user OAuth-only (password null), bisa langsung set password baru
 
-      // Update password
       await tx
-        .update(users)
+        .update(usersTable)
         .set({ password: hashedPassword, updatedAt: new Date() })
-        .where(eq(users.id, userId));
+        .where(eq(usersTable.id, userId));
 
-      // Revoke semua refresh token
       await tx
-        .update(refreshTokens)
+        .update(refreshTokensTable)
         .set({ isRevoked: true })
         .where(
           and(
-            eq(refreshTokens.userId, userId),
-            eq(refreshTokens.isRevoked, false),
+            eq(refreshTokensTable.userId, userId),
+            eq(refreshTokensTable.isRevoked, false),
           ),
         );
 
       return { ok: true as const };
     });
 
-    // ── Post-transaction: throw errors SETELAH commit ─────────────────────
     if ("error" in result) {
       switch (result.error) {
         case "USER_NOT_FOUND":
@@ -171,10 +175,11 @@ export class SettingService {
           fail("Password lama wajib diisi", "CURRENT_PASSWORD_REQUIRED", 400);
         case "INVALID_CURRENT_PASSWORD":
           fail("Password lama salah", "INVALID_CURRENT_PASSWORD");
+        case "PASSWORD_UNCHANGED":
+          fail("Password baru tidak boleh sama dengan password lama", "PASSWORD_UNCHANGED", 400);
       }
     }
 
-    // Generate token pair baru untuk sesi saat ini
     const tokens = await this.authService.generateTokenPair(
       userId,
       clientType,
@@ -186,11 +191,11 @@ export class SettingService {
   }
 
   // ── Check User Exists ───────────────────────────────────────────────────
-  // Dipakai untuk validasi user sebelum upload ke R2.
 
   async checkUserExists(userId: string): Promise<{ avatarUrl: string | null }> {
+    const usersTable = this.adapter.tables.users;
     const user = await this.db.query.users.findFirst({
-      where: eq(users.id, userId),
+      where: eq(usersTable.id, userId),
       columns: { id: true, avatarUrl: true },
     });
 
@@ -202,13 +207,13 @@ export class SettingService {
   }
 
   // ── Update Avatar URL in DB ─────────────────────────────────────────────
-  // Simpan avatar URL baru ke database. Dipanggil SETELAH upload ke R2 sukses.
 
   async updateAvatarUrl(userId: string, avatarUrl: string | null) {
-    return await this.db.transaction(async (tx) => {
-      // 1. Ambil URL avatar lama secara fresh tanpa cache Hyperdrive
+    const usersTable = this.adapter.tables.users;
+
+    return await this.db.transaction(async (tx: any) => {
       const existing = await tx.query.users.findFirst({
-        where: eq(users.id, userId),
+        where: eq(usersTable.id, userId),
         columns: { avatarUrl: true },
       });
 
@@ -216,15 +221,14 @@ export class SettingService {
         fail("User tidak ditemukan", "USER_NOT_FOUND", 404);
       }
 
-      // 2. Lakukan update URL avatar baru
       const [updated] = await tx
-        .update(users)
+        .update(usersTable)
         .set({ avatarUrl, updatedAt: new Date() })
-        .where(eq(users.id, userId))
+        .where(eq(usersTable.id, userId))
         .returning({
-          id: users.id,
-          avatarUrl: users.avatarUrl,
-          updatedAt: users.updatedAt,
+          id: usersTable.id,
+          avatarUrl: usersTable.avatarUrl,
+          updatedAt: usersTable.updatedAt,
         });
 
       if (!updated) {
@@ -236,7 +240,6 @@ export class SettingService {
   }
 
   // ── Update Avatar from URL (JSON mode) ──────────────────────────────────
-  // Mode lama: user kirim URL avatar sebagai JSON body.
 
   async updateAvatarFromUrl(
     userId: string,
@@ -244,71 +247,42 @@ export class SettingService {
     bucket?: R2Bucket,
     bucketPublicUrl?: string,
   ) {
-    // Jika user ingin menghapus avatar (null), langsung set null
-    if (avatarUrl === null) {
-      // Cek avatar lama dulu untuk dihapus (karena diset null)
-      const currentUser = await this.db.query.users.findFirst({
-        where: eq(users.id, userId),
-        columns: { avatarUrl: true },
-      });
+    const usersTable = this.adapter.tables.users;
 
-      const oldKey = extractR2KeyFromUrl(currentUser?.avatarUrl ?? null, bucketPublicUrl);
+    if (avatarUrl === null) {
+      const { updated, oldAvatarUrl } = await this.updateAvatarUrl(userId, null);
+      const oldKey = extractR2KeyFromUrl(oldAvatarUrl, bucketPublicUrl);
       if (oldKey && bucket) {
         bucket.delete(oldKey).catch((err) =>
           console.error(`[setting] Gagal hapus R2 lama: ${oldKey}`, err)
         );
       }
-
-      const [updated] = await this.db
-        .update(users)
-        .set({ avatarUrl: null, updatedAt: new Date() })
-        .where(eq(users.id, userId))
-        .returning({
-          id: users.id,
-          avatarUrl: users.avatarUrl,
-          updatedAt: users.updatedAt,
-        });
-
       return { ...updated, blocked: false };
     }
 
-    // Jalankan AI filter
     const result = await this.imageFilter.isImageAllowed(avatarUrl);
 
     if (!result.allowed) {
-      // Ambil avatar lama — jangan ubah ke null, pertahankan avatar lama
       const currentUser = await this.db.query.users.findFirst({
-        where: eq(users.id, userId),
+        where: eq(usersTable.id, userId),
         columns: { id: true, avatarUrl: true, updatedAt: true },
       });
 
+      if (!currentUser) {
+        fail("User tidak ditemukan", "USER_NOT_FOUND", 404);
+      }
+
       return {
-        id: currentUser!.id,
-        avatarUrl: currentUser!.avatarUrl,
-        updatedAt: currentUser!.updatedAt,
+        id: currentUser.id,
+        avatarUrl: currentUser.avatarUrl,
+        updatedAt: currentUser.updatedAt,
         blocked: true,
         blockedReason: result.reason,
       };
     }
 
-    // Ambil URL lama dari DB untuk nantinya dihapus jika ada di r2 kita
-    const currentUser = await this.db.query.users.findFirst({
-      where: eq(users.id, userId),
-      columns: { avatarUrl: true },
-    });
-
-    const [updated] = await this.db
-      .update(users)
-      .set({ avatarUrl, updatedAt: new Date() })
-      .where(eq(users.id, userId))
-      .returning({
-        id: users.id,
-        avatarUrl: users.avatarUrl,
-        updatedAt: users.updatedAt,
-      });
-      
-    // Hapus data lama yang ada di R2 jika berganti dengan url eksternal
-    const oldKey = extractR2KeyFromUrl(currentUser?.avatarUrl ?? null, bucketPublicUrl);
+    const { updated, oldAvatarUrl } = await this.updateAvatarUrl(userId, avatarUrl);
+    const oldKey = extractR2KeyFromUrl(oldAvatarUrl, bucketPublicUrl);
     if (oldKey && bucket) {
       bucket.delete(oldKey).catch((err) =>
         console.error(`[setting] Gagal hapus R2 lama: ${oldKey}`, err)

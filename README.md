@@ -1,48 +1,66 @@
 # @bambsdev/auth
 
-> 🔐 **The Complete Authentication Solution** for Hono, Cloudflare Workers, and Drizzle ORM.
+> 🔐 **The Complete Authentication Solution** for Hono, Cloudflare Workers (Edge Runtime), and Drizzle ORM.
 
-`@bambsdev/auth` is a production-ready, type-safe authentication package designed specifically for the Cloudflare ecosystem. It provides everything from standard JWT auth and session management to Google OAuth, customizable AI-filtered avatar uploads, customizable verification email flows (OTP / Link), and automated OpenAPI/Swagger documentation.
+`@bambsdev/auth` (v1.4.0) is a production-ready, type-safe, multi-database authentication library designed specifically for the Cloudflare Workers ecosystem. It provides everything from standard JWT auth and family-based refresh token rotation to Google OAuth, AI-moderated avatar uploads (Cloudflare R2 + Workers AI), customizable verification flows (OTP / Link), and automated OpenAPI/Swagger documentation.
 
 ---
 
 ## 🏗 Architecture & Tech Stack
 
-This package is built on a **Clean Service Layer Architecture**. Business logic is strictly separated from routing and infrastructure, making it highly testable and maintainable.
+This package follows a **Clean Service Layer Architecture**. Business logic is strictly decoupled from routing and infrastructure, ensuring high testability, modularity, and edge runtime compatibility.
 
 ### Core Technologies
 
-- **Framework**: [Hono](https://hono.dev) (specifically utilizing `OpenAPIHono` for auto-documentation)
-- **Runtime**: [Cloudflare Workers](https://workers.cloudflare.com/)
-- **Database**: PostgreSQL (connected via [Cloudflare Hyperdrive](https://developers.cloudflare.com/hyperdrive/) for connection pooling)
+- **Framework**: [Hono](https://hono.dev) (powered by `@hono/zod-openapi` for automatic OpenAPI/Swagger documentation)
+- **Runtime**: [Cloudflare Workers](https://workers.cloudflare.com/) (Edge Serverless)
+- **Multi-Database Support**:
+  - **PostgreSQL**: Subpath `@bambsdev/auth/pg` via [Cloudflare Hyperdrive](https://developers.cloudflare.com/hyperdrive/) / `node-postgres`
+  - **Cloudflare D1 (SQLite)**: Subpath `@bambsdev/auth/d1` via Cloudflare native D1 Edge Database
+  - **Shared Core**: Root `@bambsdev/auth` for shared types, utilities, and schemas
 - **ORM**: [Drizzle ORM](https://orm.drizzle.team/)
-- **Storage**: Cloudflare R2 (for Profiles & Avatar management)
-- **State & Caching**: Cloudflare KV (for OAuth state, token blacklisting, and rate limiting)
-- **AI Integration**: Cloudflare Workers AI (utilizing `@cf/microsoft/resnet-50` for image safety classification)
-- **Observability**: Cloudflare Analytics Engine (for standard Audit Logging)
+- **Storage**: Cloudflare R2 (for avatar storage & orphan cleanup)
+- **State & Caching**: Two-tier caching (Cloudflare Cache API L1 + Cloudflare KV L2) for rate limiting, blacklisting, and OAuth CSRF states
+- **AI Moderation**: Cloudflare Workers AI (`@cf/microsoft/resnet-50` for image safety classification)
+- **Observability**: Cloudflare Analytics Engine (for non-blocking audit logging)
+- **Email Service**: Resend API via native `fetch` (for OTP codes, verification links, and password resets)
 
 ---
 
 ## ✨ Key Features
 
-### 🛡️ Core Authentication & Customizable OTP/Link Flow
-- **Flexible Verification Methods**: Choose between standard verification **links** or **6-digit OTP codes** (`verificationMethod: "code" | "link"`).
-- **Security & Session Management**:
-  - JWT Access tokens combined with secure Refresh token rotation.
-  - Refresh token family tracking (automatically detects and revokes reused/stolen tokens).
-  - List active sessions, revoke specific sessions, or execute a global "Logout all devices" command.
-- **Configurable TTL & Templates**: Set custom verification code TTL (`verificationCodeTtlMinutes`) and custom email templates.
+### 🛡️ Core Authentication & Session Management
+- **Token Rotation & Reuse Detection**: Refresh token rotation with family-based tracking. If an old token is reused, all tokens in the family are automatically revoked.
+- **Session Control**: List active devices, revoke individual sessions, or execute a global "Logout from all devices" command.
+- **Two-Tier Edge Cache**: L1 Cache API + L2 KV caching with negative caching (`"0"`) reducing KV read costs by up to 99%.
 
-### 🌐 Google OAuth Integration
-- **Web Flow**: Standard redirect-based authentication.
-- **Mobile Flow**: Direct Google ID Token validation tailored for Native SDKs (Android/iOS).
-- **Smart Account Linking**: Automatically links new Google logins to existing email/password registrations while intelligently preserving custom user data.
+### 📨 Flexible Email Verification & Password Reset
+- **Verification Modes**: Choose between **6-digit numeric OTP codes** or **URL verification links** (`verificationMethod: "code" | "link"`).
+- **Customizable Templates**: Fully customizable email templates and configurable OTP TTL.
+- **Secure Password Reset**: Transactional password reset with 64-character hex tokens and automatic invalidation of old unused tokens.
+- **Password Reuse Prevention**: Rejects password changes if the new password is identical to the current one.
 
-### 👤 User Settings & Avatar Uploads (R2 + AI-Filtered)
-- **Built-in Safety Filter**: Powered by Cloudflare Workers AI using `@cf/microsoft/resnet-50` model.
-- **Independent & Decoupled**: The library is 100% independent. No external image-filter package needed.
-- **Flexible Rules**: By default, it allows humans and pets but blocks swimwear, underwear, and offensive content (`bikini`, `brassiere`, `miniskirt`, `maillot`, `diaper`, `sex`, `sexy`, `vulgar`).
-- **Customizable rules**: Consumers can inject custom labels and confidence thresholds directly via Hono context variable `imageFilterConfig` (no code changes or library recompilation needed).
+### 🌐 Google OAuth 2.0 Integration
+- **Web Flow**: Standard redirect flow with RFC 6750 compliant **URL Fragment delivery** (`#accessToken=...`) preventing token leakage in logs and referrers.
+- **Mobile Flow**: Direct Google ID token verification via Native SDKs (Android/iOS).
+- **Smart Account Linking**: Atomically links Google logins to existing accounts with matching email addresses.
+- **Open Redirect Protection**: Strict fail-closed validation of redirect URLs against `ALLOWED_ORIGINS` and `APP_URL`.
+
+### 👤 Avatar Uploads (Cloudflare R2 + Workers AI Moderation)
+- **Built-in AI Moderation**: Uses `@cf/microsoft/resnet-50` to classify uploaded avatars.
+- **SSRF Protection**: Strict URL validation blocking private IPs, metadata endpoints (`169.254.169.254`), and localhost before fetching images.
+- **Automatic Storage Cleanup**: Deletes old avatar files from R2 automatically upon new upload or deletion.
+- **R2 Proxy Endpoint**: Built-in streaming proxy route for R2 files when custom domains are not configured.
+
+---
+
+## 📦 Subpath Package Exports
+
+| Subpath | Dialect / Target | Database Middleware | Primary Use Case |
+| :--- | :--- | :--- | :--- |
+| `@bambsdev/auth/pg` | PostgreSQL | `dbMiddleware` | Cloudflare Workers using Hyperdrive / PostgreSQL |
+| `@bambsdev/auth/d1` | Cloudflare D1 | `dbMiddleware` | Cloudflare Workers using native Cloudflare D1 (SQLite) |
+| `@bambsdev/auth` | Core Agnostic | N/A | Shared schemas, types, error utilities, and helpers |
 
 ---
 
@@ -56,61 +74,67 @@ bun add @bambsdev/auth
 
 ### 2. Peer Dependencies
 
-This package requires the following dependencies in your consumer application:
+Install the peer dependencies required for your database choice:
 
 ```bash
+# For PostgreSQL Workers:
 bun add hono @hono/zod-openapi drizzle-orm pg zod
+
+# For Cloudflare D1 Workers (zero pg dependencies needed):
+bun add hono @hono/zod-openapi drizzle-orm zod
 ```
 
-### 3. Quick Start (Hono App)
+---
 
-Mounting the authentication system is incredibly straightforward:
+## ⚡ Quick Start Examples
+
+### Option A: PostgreSQL Worker (`@bambsdev/auth/pg`)
 
 ```typescript
 import { Hono } from "hono";
-import {
-  authRoutes,
-  settingRoutes,
-  dbMiddleware,
-  customLogger,
-  type EmailConfig,
-} from "@bambsdev/auth";
-import type { AuthBindings, AuthVariables } from "@bambsdev/auth";
+import { authRoutes, settingRoutes, dbMiddleware } from "@bambsdev/auth/pg";
+import type { PgBindings, PgVariables } from "@bambsdev/auth/pg";
+import type { EmailConfig } from "@bambsdev/auth";
 
-const app = new Hono<{ Bindings: AuthBindings; Variables: AuthVariables }>();
+const app = new Hono<{ Bindings: PgBindings; Variables: PgVariables }>();
 
-// Logger — Format: [ISO_TIMESTAMP] METHOD /path - STATUS (TIMINGms) IP:xxx
-app.use("*", customLogger());
+// Injects Drizzle PostgreSQL client into context
+app.use("*", dbMiddleware);
 
-// DB Middleware — Injects the Drizzle DB instance into every request
-app.use("/auth/*", dbMiddleware);
-app.use("/api/*", dbMiddleware);
-
-// ─── Verification Flow Configuration ───
+// Optional Email Configuration
 const emailConfig: EmailConfig = {
   from: "No-Reply <noreply@myapp.com>",
-  verificationMethod: "code", // "code" (OTP) atau "link" (URL)
+  verificationMethod: "code", // "code" (OTP) | "link" (URL)
   verificationCodeTtlMinutes: 10,
   resetPasswordBaseUrl: "https://myapp.com",
-  templates: {
-    verification: (codeOrUrl) => `Kode verifikasi Anda adalah: ${codeOrUrl}`,
-  }
-};
-
-// ─── Image Filter Configuration ───
-const imageFilterConfig = {
-  enabled: true,
-  blockedLabels: ["bikini", "brassiere", "sex", "sexy", "vulgar"],
-  confidenceThreshold: 0.15
 };
 
 app.use("*", async (c, next) => {
   c.set("emailConfig", emailConfig);
-  c.set("imageFilterConfig", imageFilterConfig); // Inject custom image rules
   await next();
 });
 
-// Mount the routes
+// Mount routes
+app.route("/auth", authRoutes);
+app.route("/api/settings", settingRoutes);
+
+export default app;
+```
+
+### Option B: Cloudflare D1 Worker (`@bambsdev/auth/d1`)
+
+```typescript
+import { Hono } from "hono";
+import { authRoutes, settingRoutes, dbMiddleware } from "@bambsdev/auth/d1";
+import type { D1Bindings, D1Variables } from "@bambsdev/auth/d1";
+import type { EmailConfig } from "@bambsdev/auth";
+
+const app = new Hono<{ Bindings: D1Bindings; Variables: D1Variables }>();
+
+// Injects Drizzle D1 client into context
+app.use("*", dbMiddleware);
+
+// Mount routes
 app.route("/auth", authRoutes);
 app.route("/api/settings", settingRoutes);
 
@@ -119,121 +143,134 @@ export default app;
 
 ---
 
-## ⚙️ Configuration (Wrangler Bindings)
+## ⚙️ Wrangler Configuration
 
-Define the following bindings in your `wrangler.toml`:
+Example `wrangler.jsonc` configuration:
 
-```toml
-[vars]
-BUCKET_PUBLIC_URL = "https://xxx.r2.dev"
-EMAIL_FROM = "No reply <noreply@xxxxx.com>"
-
-# Secrets (Set these via `wrangler secret put`)
-# JWT_SECRET, JWT_REFRESH_SECRET, RESEND_API_KEY, GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET
-
-[[hyperdrive]]
-binding = "HYPERDRIVE"
-id = "your-hyperdrive-id"
-
-[[r2_buckets]]
-binding = "R2_PUBLIC"
-bucket_name = "your-bucket-name"
-
-[[kv_namespaces]]
-binding = "KV"
-id = "your-kv-id"
-
-[[analytics_engine_datasets]]
-binding = "ANALYTICS"
-
-[ai]
-binding = "AI"
+```jsonc
+{
+  "name": "my-auth-worker",
+  "main": "src/index.ts",
+  "compatibility_date": "2024-09-23",
+  "vars": {
+    "APP_URL": "https://myapp.com",
+    "ALLOWED_ORIGINS": "https://myapp.com,https://admin.myapp.com",
+    "EMAIL_FROM": "No-Reply <noreply@myapp.com>",
+    "BUCKET_PUBLIC_URL": "https://pub-xxx.r2.dev",
+    "GOOGLE_CLIENT_ID": "xxx.apps.googleusercontent.com",
+    "GOOGLE_CLIENT_SECRET": "GOCSPX-xxx",
+    "GOOGLE_ALLOWED_CLIENT_IDS": "android-client-id,ios-client-id",
+    "JWT_SECRET": "your-jwt-access-secret-min-32-chars",
+    "JWT_REFRESH_SECRET": "your-jwt-refresh-secret-min-32-chars",
+    "RESEND_API_KEY": "re_xxx"
+  },
+  // For PostgreSQL:
+  "hyperdrive": [
+    { "binding": "HYPERDRIVE", "id": "<your-hyperdrive-id>" }
+  ],
+  // For Cloudflare D1:
+  "d1_databases": [
+    { "binding": "DB", "database_name": "my-auth-db", "database_id": "<your-d1-id>" }
+  ],
+  "kv_namespaces": [
+    { "binding": "KV", "id": "<your-kv-id>" }
+  ],
+  "r2_buckets": [
+    { "binding": "R2_PUBLIC", "bucket_name": "my-avatars" }
+  ],
+  "ai": { "binding": "AI" },
+  "analytics_engine_datasets": [
+    { "binding": "ANALYTICS" }
+  ]
+}
 ```
 
 ---
 
-## 🗄️ Database Schema & Migrations
+## 🧹 Scheduled Token Cleanups (Cron Trigger)
 
-Drizzle migrations config `drizzle.config.ts`:
+Clean up expired refresh tokens, verification tokens, and password reset records periodically:
 
+### PostgreSQL:
 ```typescript
-import { defineConfig } from "drizzle-kit";
+import {
+  cleanupExpiredTokens,
+  cleanupExpiredPasswordResets,
+  cleanupExpiredEmailVerifications,
+} from "@bambsdev/auth/pg";
 
-export default defineConfig({
-  schema: [
-    "./node_modules/@bambsdev/auth/dist/index.js",
-    "./src/db/schema.ts",
-  ],
-  out: "./drizzle",
-  dialect: "postgresql",
-  dbCredentials: {
-    url: process.env.DATABASE_URL!,
+export default {
+  async scheduled(event, env, ctx) {
+    const conn = env.LOCAL_DATABASE_URL || env.HYPERDRIVE?.connectionString;
+    ctx.waitUntil(cleanupExpiredTokens(conn));
+    ctx.waitUntil(cleanupExpiredPasswordResets(conn));
+    ctx.waitUntil(cleanupExpiredEmailVerifications(conn));
   },
-});
+};
+```
+
+### Cloudflare D1:
+```typescript
+import {
+  cleanupExpiredTokensD1,
+  cleanupExpiredPasswordResetsD1,
+  cleanupExpiredEmailVerificationsD1,
+} from "@bambsdev/auth/d1";
+
+export default {
+  async scheduled(event, env, ctx) {
+    ctx.waitUntil(cleanupExpiredTokensD1(env.DB));
+    ctx.waitUntil(cleanupExpiredPasswordResetsD1(env.DB));
+    ctx.waitUntil(cleanupExpiredEmailVerificationsD1(env.DB));
+  },
+};
 ```
 
 ---
 
 ## 🗺️ API Reference
 
-### Auth Endpoints (`/auth`)
+### 🔐 Auth Endpoints (`/auth`)
 
-| Method   | Path                        | Access     | Description                                           |
-| :------- | :-------------------------- | :--------- | :---------------------------------------------------- |
-| `POST`   | `/auth/register`            | Public     | Register a new user account                           |
-| `POST`   | `/auth/login`               | Public     | Login via email & password                            |
-| `POST`   | `/auth/refresh`             | Public     | Rotate refresh token to get a new access token        |
-| `POST`   | `/auth/logout`              | 🔒 Private | Logout (revokes the current session)                  |
-| `POST`   | `/auth/logout-all`          | 🔒 Private | Security: Logout from all devices simultaneously      |
-| `GET`    | `/auth/sessions`            | 🔒 Private | List all active sessions for the user                 |
-| `DELETE` | `/auth/sessions/:id`        | 🔒 Private | Revoke a specific active session                      |
-| `GET`    | `/auth/verify-email`        | Public     | Link Flow: Verify email ownership via token           |
-| `POST`   | `/auth/verify-email-code`   | Public     | Code Flow (OTP): Verify email via 6-digit OTP code    |
-| `POST`   | `/auth/resend-verification` | Public     | Resend the email verification OTP code or link        |
-| `GET`    | `/auth/google/login`        | Public     | Redirects user to the Google Consent screen (Web)     |
-| `GET`    | `/auth/google/callback`     | Public     | Handles the callback code from Google                 |
-| `POST`   | `/auth/google/token`        | Public     | Verifies a Google ID token directly (Mobile/SDK flow) |
+| Method   | Path                        | Access     | Rate Limit | Description                                            |
+| :------- | :-------------------------- | :--------- | :--------- | :----------------------------------------------------- |
+| `POST`   | `/auth/register`            | Public     | -          | Register new user with email, password, and username   |
+| `POST`   | `/auth/login`               | Public     | 5 / 5 min  | Login with email & password, returns JWT token pair    |
+| `POST`   | `/auth/refresh`             | Public     | 5 / 5 min  | Rotate refresh token for a new access token            |
+| `POST`   | `/auth/logout`              | 🔒 Private | -          | Logout current device session (blacklists JWT)         |
+| `POST`   | `/auth/logout-all`          | 🔒 Private | -          | Revoke all active sessions across all devices          |
+| `GET`    | `/auth/sessions`            | 🔒 Private | -          | List all active sessions with device info              |
+| `DELETE` | `/auth/sessions/:id`        | 🔒 Private | -          | Revoke a specific session ID                           |
+| `GET`    | `/auth/verify-email`        | Public     | -          | Verify email via 64-character hex link token           |
+| `POST`   | `/auth/verify-email-code`   | Public     | 5 / 5 min  | Verify email via 6-digit numeric OTP code              |
+| `POST`   | `/auth/resend-verification` | Public     | 3 / 5 min  | Resend verification code or link                       |
+| `GET`    | `/auth/google/login`        | Public     | -          | Redirect to Google OAuth consent screen (Web flow)     |
+| `GET`    | `/auth/google/callback`     | Public     | -          | Handle Google redirect, returns token in URL fragment  |
+| `POST`   | `/auth/google/token`        | Public     | 5 / 5 min  | Verify Google ID token from Native Mobile SDK          |
+| `POST`   | `/auth/forgot-password`     | Public     | 3 / 5 min  | Request password reset link email                      |
+| `POST`   | `/auth/reset-password`      | Public     | 10 / 5 min | Reset password using 64-character hex token            |
 
-### User Settings Endpoints (`/api/settings`)
+### 👤 Settings Endpoints (`/api/settings`)
 
-| Method | Path                     | Access     | Description                                    |
-| :----- | :----------------------- | :--------- | :--------------------------------------------- |
-| `GET`  | `/api/settings/profile`  | 🔒 Private | Retrieve the current user's profile            |
-| `PUT`  | `/api/settings/profile`  | 🔒 Private | Update basic info (username, full name)        |
-| `PUT`  | `/api/settings/password` | 🔒 Private | Authenticated password change                  |
-| `PUT`  | `/api/settings/avatar`   | 🔒 Private | Upload and update avatar (Multipart form-data) |
-
----
-
-## Highlight: `ImageFilterService`
-
-A powerful utility to automatically filter images using Cloudflare Workers AI.
-
-```typescript
-import { ImageFilterService } from "@bambsdev/auth";
-
-const filter = new ImageFilterService(c.env.AI, c.var.imageFilterConfig);
-
-// Check if an image is appropriate
-const result = await filter.isImageAllowed("https://example.com/image.jpg");
-// → { allowed: true } OR { allowed: false, reason: "Terdeteksi konten tidak pantas (bikini) ..." }
-```
+| Method   | Path                            | Access     | Description                                         |
+| :------- | :------------------------------ | :--------- | :-------------------------------------------------- |
+| `GET`    | `/api/settings/profile`         | 🔒 Private | Get authenticated user profile                      |
+| `PUT`    | `/api/settings/profile`         | 🔒 Private | Update username (case-insensitive) or full name     |
+| `PUT`    | `/api/settings/password`        | 🔒 Private | Change password (revokes old device sessions)       |
+| `PUT`    | `/api/settings/avatar`          | 🔒 Private | Upload avatar file (Multipart, AI safety check, R2) |
+| `DELETE` | `/api/settings/avatar`          | 🔒 Private | Delete avatar and clean up physical file from R2    |
+| `GET`    | `/api/settings/avatar-file/*`   | Public     | Streaming proxy for avatar images from R2           |
 
 ---
 
-## 📜 Changelog
+## 📜 Documentation Guides
 
-### v1.3.9
-- **🛠️ AI Safety Classification**: Switched from object detection model to `@cf/microsoft/resnet-50` (1000 categories) for more granular swimwear and underwear detection.
-- **👤 Looser Default Filtering**: By default, human faces and pets are allowed. Swimwear, underwear, and offensive content keywords (e.g. `sex`, `sexy`, `vulgar`) are blocked.
-- **⚙️ Consumer Configuration**: Added `imageFilterConfig` context variables, allowing consumers to fully customize rules (blocked labels and confidence thresholds) directly without recompiling the library.
-- **📨 OTP Verification**: Added support for 6-digit OTP codes via `verify-email-code` endpoint and configurable TTL.
-
-### v1.3.4
-- **🛡️ Security & UX**: Refined `avatarUrl` synchronization logic. The system now strictly preserves existing custom avatars and only pulls from Google for new account creations.
+- [MIGRATION.md](file:///d:/project-hono/auth/MIGRATION.md): Comprehensive multi-database migration and configuration guide.
+- [CHANGELOG.md](file:///d:/project-hono/auth/CHANGELOG.md): Detailed release notes and breaking changes history.
 
 ---
 
 ## 📜 License
 
 ISC License
+

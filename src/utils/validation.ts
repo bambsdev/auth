@@ -58,6 +58,19 @@ export const logoutSchema = z.object({
     .openapi({ example: "eyJhbG...", description: "Refresh Token untuk di-revoke" }),
 }).openapi("LogoutRequest");
 
+// ── Verify Email by Link ──────────────────────────────────────────────────────
+
+export const verifyEmailSchema = z.object({
+  token: z
+    .string()
+    .length(64, "Token verifikasi tidak valid")
+    .regex(/^[a-f0-9]+$/, "Token verifikasi tidak valid")
+    .openapi({
+      example: "e89b12d3...",
+      description: "Token unik 64 karakter hex",
+    }),
+}).openapi("VerifyEmailRequest");
+
 // ── Verify Email by Code (OTP method) ────────────────────────────────────────
 
 export const verifyEmailCodeSchema = z.object({
@@ -96,8 +109,11 @@ export const forgotPasswordSchema = z.object({
 // ── Reset Password ────────────────────────────────────────────────────────────
 
 export const resetPasswordSchema = z.object({
-  token: z.string().min(1, "Token reset wajib diisi")
-    .openapi({ example: "e89b-12d3...", description: "Token unik" }),
+  token: z
+    .string()
+    .length(64, "Token reset tidak valid")
+    .regex(/^[a-f0-9]+$/, "Token reset tidak valid")
+    .openapi({ example: "e89b12d3...", description: "Token unik 64 karakter hex" }),
   newPassword: z
     .string()
     .min(6, "Password baru minimal 6 karakter")

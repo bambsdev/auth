@@ -1,10 +1,14 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts"],
+  entry: {
+    index: "src/index.ts",
+    "pg/index": "src/pg/index.ts",
+    "d1/index": "src/d1/index.ts",
+  },
   format: ["esm", "cjs"],
   dts: true,
-  splitting: false,
+  splitting: true,
   sourcemap: true,
   clean: true,
   external: [
@@ -14,5 +18,6 @@ export default defineConfig({
     "drizzle-orm/*",
     "pg",
     "zod",
+    "@hono/zod-openapi",
   ],
 });

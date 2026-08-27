@@ -9,6 +9,7 @@ export interface ImageFilterConfig {
   enabled?: boolean;
   blockedLabels?: string[];
   confidenceThreshold?: number;
+  maxSizeBytes?: number; // Custom max avatar file size in bytes (default: 1MB)
 }
 
 export interface IImageFilterService {
@@ -38,6 +39,48 @@ const DEFAULT_BLOCKED_LABELS = [
   "vulgar"
 ];
 
+export function isSafeUrl(url: string): boolean {
+  try {
+    const parsed = new URL(url);
+    if (!["http:", "https:"].includes(parsed.protocol)) return false;
+
+    const hostname = parsed.hostname.toLowerCase();
+    if (
+      hostname === "localhost" ||
+      hostname === "127.0.0.1" ||
+      hostname === "::1" ||
+      hostname === "0.0.0.0" ||
+      hostname === "169.254.169.254"
+    ) {
+      return false;
+    }
+
+    // Blokir private IPv4 ranges (10.x.x.x, 172.16-31.x.x, 192.168.x.x, 100.64-127.x.x CGNAT, 169.254.x.x link-local)
+    if (
+      /^(10\.|172\.(1[6-9]|2\d|3[01])\.|192\.168\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.|169\.254\.)/.test(
+        hostname,
+      )
+    ) {
+      return false;
+    }
+
+    // Blokir suffix domain internal/lokal
+    if (
+      hostname.endsWith(".internal") ||
+      hostname.endsWith(".local") ||
+      hostname.endsWith(".localhost") ||
+      hostname.endsWith(".lan") ||
+      hostname.endsWith(".home")
+    ) {
+      return false;
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export class ImageFilterService implements IImageFilterService {
   constructor(
     private readonly ai: Ai,
@@ -54,6 +97,10 @@ export class ImageFilterService implements IImageFilterService {
     try {
       if (this.config?.enabled === false) {
         return { allowed: true };
+      }
+
+      if (!isSafeUrl(imageUrl)) {
+        return { allowed: false, reason: "URL gambar tidak valid atau tidak diizinkan" };
       }
 
       // 1. Fetch image
@@ -73,15 +120,10 @@ export class ImageFilterService implements IImageFilterService {
       // 2. Classify Image menggunakan @cf/microsoft/resnet-50
       try {
         const detections = (await this.ai.run("@cf/microsoft/resnet-50" as any, {
-          image: Array.from(imageArray),
+          image: imageArray as any,
         }) as unknown) as { label: string; score: number }[];
 
         if (detections && Array.isArray(detections)) {
-          // DEBUG: Log top results
-          console.log(`[image-filter] Classification Results:`, 
-            detections.slice(0, 3).map(d => `${d.label} (${(d.score * 100).toFixed(1)}%)`).join(", ")
-          );
-
           const threshold = this.config?.confidenceThreshold ?? CONFIDENCE_THRESHOLD;
           const blocked = this.config?.blockedLabels ?? DEFAULT_BLOCKED_LABELS;
 
@@ -137,15 +179,10 @@ export class ImageFilterService implements IImageFilterService {
       // 2. Classify Image (Buffer)
       try {
         const detections = (await this.ai.run("@cf/microsoft/resnet-50" as any, {
-          image: Array.from(imageArray),
+          image: imageArray as any,
         }) as unknown) as { label: string; score: number }[];
 
         if (detections && Array.isArray(detections)) {
-          // DEBUG: Log top results (Buffer)
-          console.log(`[image-filter] Classification Results (Buffer):`, 
-            detections.slice(0, 3).map(d => `${d.label} (${(d.score * 100).toFixed(1)}%)`).join(", ")
-          );
-
           const threshold = this.config?.confidenceThreshold ?? CONFIDENCE_THRESHOLD;
           const blocked = this.config?.blockedLabels ?? DEFAULT_BLOCKED_LABELS;
 
@@ -188,7 +225,7 @@ export class ImageFilterService implements IImageFilterService {
 
     const result = await this.isImageAllowed(imageUrl);
     if (!result.allowed) {
-      console.log(`[image-filter] Image blocked: ${result.reason}`);
+      console.warn(`[image-filter] Image blocked: ${result.reason}`);
       return null;
     }
 

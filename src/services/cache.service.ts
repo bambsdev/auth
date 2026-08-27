@@ -99,17 +99,24 @@ export class CacheService {
     return count;
   }
 
-  async incrementRateLimit(ip: string): Promise<number> {
+  async incrementRateLimit(
+    ip: string,
+    windowSeconds: number = RATE_LIMIT_WINDOW,
+  ): Promise<number> {
     const key = `ratelimit:${ip}`;
-    const current = await this.getRateLimit(ip);
+    const kvVal = await this.kv.get(key);
+    const current = kvVal ? parseInt(kvVal, 10) : 0;
     const newCount = current + 1;
 
     await this.kv.put(key, String(newCount), {
-      expirationTtl: RATE_LIMIT_WINDOW,
+      expirationTtl: windowSeconds,
     });
 
     // Update cache dengan nilai terbaru
-    await this.cache.put(this.key(key), this.response(String(newCount), 30));
+    await this.cache.put(
+      this.key(key),
+      this.response(String(newCount), Math.min(30, windowSeconds)),
+    );
     return newCount;
   }
 

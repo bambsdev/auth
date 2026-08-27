@@ -163,4 +163,28 @@ describe("ImageFilterService Unit Tests (TDD)", () => {
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain("brassiere, bra, bandeau");
   });
+
+  test("should block SSRF URLs (localhost, private IPs, metadata endpoint, non-http protocols)", async () => {
+    const mockAi = createMockAi([]);
+    const service = new ImageFilterService(mockAi);
+
+    const dangerousUrls = [
+      "http://localhost/secret.jpg",
+      "http://127.0.0.1:8787/avatar.png",
+      "http://169.254.169.254/latest/meta-data/",
+      "http://10.0.0.1/admin.png",
+      "http://192.168.1.1/router.jpg",
+      "http://172.16.0.1/internal.jpg",
+      "http://app.internal/avatar.jpg",
+      "ftp://example.com/avatar.jpg",
+      "file:///etc/passwd",
+    ];
+
+    for (const url of dangerousUrls) {
+      const result = await service.isImageAllowed(url);
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain("tidak valid atau tidak diizinkan");
+    }
+  });
 });
+

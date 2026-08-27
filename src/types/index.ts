@@ -1,9 +1,13 @@
 // src/types/index.ts
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import type { DrizzleD1Database } from "drizzle-orm/d1";
 import type { ClientType } from "../config/token.config";
+import type * as pgSchema from "../db/pg/schema";
+import type * as d1Schema from "../db/d1/schema";
+import type { ImageFilterConfig } from "../utils/image-filter";
 
-// ── Cloudflare Worker Bindings ────────────────────────────────────────────────
-export type Bindings = {
-  HYPERDRIVE: Hyperdrive;
+// ── Cloudflare Worker Shared Bindings ─────────────────────────────────────────
+export type SharedAuthBindings = {
   KV: KVNamespace;
   ANALYTICS: AnalyticsEngineDataset;
   JWT_SECRET: string;
@@ -13,21 +17,57 @@ export type Bindings = {
   EMAIL_FROM?: string; // (Opsional) email pengirim default
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
+  GOOGLE_ALLOWED_CLIENT_IDS?: string; // Comma-separated extra client IDs (mobile Android/iOS)
+  ALLOWED_ORIGINS?: string; // Comma-separated allowed frontend origins for OAuth redirect
   AI: Ai; // Cloudflare Workers AI binding
-  LOCAL_DATABASE_URL?: string; // used to bypass local hyperdrive proxy
   R2_PUBLIC?: R2Bucket; // R2 Bucket untuk upload public files
   BUCKET_PUBLIC_URL?: string; // Base URL public bucket (opsional)
 };
 
+// ── Dialect Specific Bindings ────────────────────────────────────────────────
+export type PgBindings = SharedAuthBindings & {
+  HYPERDRIVE: Hyperdrive;
+  LOCAL_DATABASE_URL?: string; // used to bypass local hyperdrive proxy
+};
+
+export type D1Bindings = SharedAuthBindings & {
+  DB: D1Database; // Cloudflare D1 binding
+};
+
+// Backward-compatible alias
+export type Bindings = PgBindings;
+
+// ── Database Types ────────────────────────────────────────────────────────────
+export type PgDB = NodePgDatabase<typeof pgSchema>;
+export type D1DB = DrizzleD1Database<typeof d1Schema>;
+export type AnyAuthDB = PgDB | D1DB;
+
+// Backward-compatible alias
+export type DB = PgDB;
+
 // ── Hono Context Variables (injected per-request) ─────────────────────────────
-export type Variables = {
+export type PgVariables = {
   userId: string;
   jti: string;
+  exp: number;
   clientType: ClientType;
-  db: import("../db/client").DB;
+  db: PgDB;
   emailConfig?: EmailConfig; // Injeksi config email dari consumer
-  imageFilterConfig?: import("../utils/image-filter").ImageFilterConfig; // Injeksi config image filter dari consumer
+  imageFilterConfig?: ImageFilterConfig; // Injeksi config image filter dari consumer
 };
+
+export type D1Variables = {
+  userId: string;
+  jti: string;
+  exp: number;
+  clientType: ClientType;
+  db: D1DB;
+  emailConfig?: EmailConfig;
+  imageFilterConfig?: ImageFilterConfig;
+};
+
+// Backward-compatible alias
+export type Variables = PgVariables;
 
 export interface EmailConfig {
   from: string;

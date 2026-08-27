@@ -60,6 +60,31 @@ export function extractR2KeyFromUrl(
   return null; // Asumsi URL Google/eksternal yang tidak dikenali
 }
 
+export function getExtensionFromContentType(contentType: string): string {
+  if (!contentType || typeof contentType !== "string") return "jpg";
+  const cleanType = contentType.split(";")[0].trim().toLowerCase();
+  switch (cleanType) {
+    case "image/jpeg":
+      return "jpg";
+    case "image/png":
+      return "png";
+    case "image/webp":
+      return "webp";
+    case "image/gif":
+      return "gif";
+    case "image/svg+xml":
+      return "svg";
+    default: {
+      const parts = cleanType.split("/");
+      if (parts.length > 1 && parts[1]) {
+        const sub = parts[1].replace(/[^a-z0-9]/g, "");
+        if (sub.length > 0) return sub;
+      }
+      return "jpg";
+    }
+  }
+}
+
 // ── Service ───────────────────────────────────────────────────────────────────
 
 export class R2UploadService {
@@ -82,7 +107,7 @@ export class R2UploadService {
     prefix: string,
     proxyBasePath: string = "/api/settings/avatar-file",
   ): Promise<{ key: string; url: string }> {
-    const ext = contentType.split("/")[1].replace("jpeg", "jpg");
+    const ext = getExtensionFromContentType(contentType);
     const key = `${prefix}/${crypto.randomUUID()}.${ext}`;
 
     await this.bucket.put(key, buffer, {

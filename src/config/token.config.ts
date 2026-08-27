@@ -28,4 +28,8 @@ export const RATE_LIMIT_WINDOW = 60 * 5; // 5 menit
 
 // Rate limit forgot-password (per email, via Cache API)
 export const FORGOT_PASSWORD_RATE_LIMIT_MAX = 3;
-export const FORGOT_PASSWORD_RATE_LIMIT_WINDOW = 60 * 15; // 15 menit
+export const FORGOT_PASSWORD_RATE_LIMIT_WINDOW = 60 * 5; // 5 menit
+
+// Rate limit OTP code verification
+export const OTP_VERIFY_RATE_LIMIT_MAX = 5;
+export const OTP_VERIFY_RATE_LIMIT_WINDOW = 60 * 5; // 5 menit

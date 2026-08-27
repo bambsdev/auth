@@ -1,16 +1,10 @@
 // src/services/verification.service.ts
-//
-// Mengelola pembuatan & verifikasi token email verification.
-// Dua mode:
-//   - Link: 32-byte random hex token (dipakai di URL verifikasi)
-//   - Code: 6-digit OTP (mobile-friendly, autofill support)
-// Keduanya disimpan sebagai SHA-256 hash di DB, TTL 15 menit, single-use.
 
-import { eq, and } from "drizzle-orm";
-import { users, emailVerifications } from "../db/schema";
+import { eq, and, isNull } from "drizzle-orm";
 import { hashToken } from "../utils/hash";
 import { fail } from "../utils/error";
-import type { DB } from "../db/client";
+import type { AnyAuthDB } from "../types/index";
+import { AuthDbAdapter, createAuthDbAdapter, type AuthDbDialect } from "../db/adapter";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const VERIFICATION_TTL_MINUTES = 15;
@@ -27,29 +21,61 @@ function generateToken(): string {
 
 /** Generate 6-digit numeric OTP (untuk code-based) */
 function generateOtpCode(): string {
-  // Gunakan random bytes untuk menghindari bias modulo
-  const buf = crypto.getRandomValues(new Uint8Array(4));
-  const num = new DataView(buf.buffer).getUint32(0, false);
-  return String(num % 1_000_000).padStart(6, "0");
+  const maxUnbiased = 4294000000;
+  for (let attempt = 0; attempt < 100; attempt++) {
+    const buf = crypto.getRandomValues(new Uint8Array(4));
+    const num = new DataView(buf.buffer).getUint32(0, false);
+    if (num < maxUnbiased) {
+      return String(num % 1_000_000).padStart(6, "0");
+    }
+  }
+  const fallbackBuf = crypto.getRandomValues(new Uint32Array(1));
+  return String(fallbackBuf[0] % 1_000_000).padStart(6, "0");
 }
 
 // ── Service ───────────────────────────────────────────────────────────────────
 
 export class VerificationService {
-  constructor(private readonly db: DB) {}
+  private readonly adapter: AuthDbAdapter;
+
+  constructor(
+    dbOrAdapter: AnyAuthDB | AuthDbAdapter,
+    dialect: AuthDbDialect = "pg",
+  ) {
+    if ("dialect" in dbOrAdapter && "tables" in dbOrAdapter) {
+      this.adapter = dbOrAdapter;
+    } else {
+      this.adapter = createAuthDbAdapter(dbOrAdapter, dialect);
+    }
+  }
+
+  get db(): any {
+    return this.adapter.db;
+  }
 
   /**
    * Buat verification token untuk user.
    * Return plain token (untuk dikirim via email).
    */
   async createVerificationToken(userId: string): Promise<string> {
+    const emailVerificationsTable = this.adapter.tables.emailVerifications;
     const token = generateToken();
     const tokenHash = await hashToken(token);
     const expiresAt = new Date(
       Date.now() + VERIFICATION_TTL_MINUTES * 60 * 1000,
     );
 
-    await this.db.insert(emailVerifications).values({
+    // Invalidate/hapus token verifikasi lama yang belum digunakan untuk user ini
+    await (this.db as any)
+      .delete(emailVerificationsTable)
+      .where(
+        and(
+          eq(emailVerificationsTable.userId, userId),
+          isNull(emailVerificationsTable.usedAt),
+        ),
+      );
+
+    await (this.db as any).insert(emailVerificationsTable).values({
       userId,
       tokenHash,
       expiresAt,
@@ -60,31 +86,40 @@ export class VerificationService {
 
   /**
    * Verifikasi email dari plain token.
-   * - Cek hash ada di DB, belum dipakai, belum expired
-   * - Set user.isEmailVerified = true
-   * - Tandai token sebagai used
    */
   async verifyEmail(token: string): Promise<{ userId: string; email: string }> {
     const tokenHash = await hashToken(token);
+    const emailVerificationsTable = this.adapter.tables.emailVerifications;
+    const usersTable = this.adapter.tables.users;
 
-    // Wrap dalam transaction untuk mencegah race condition
-    // (dua request simultaneous verify token yang sama)
-    return this.db.transaction(async (tx) => {
-      // Cari token yang valid
-      const [record] = await tx
-        .select({
-          id: emailVerifications.id,
-          userId: emailVerifications.userId,
-          expiresAt: emailVerifications.expiresAt,
-          usedAt: emailVerifications.usedAt,
-        })
-        .from(emailVerifications)
-        .where(eq(emailVerifications.tokenHash, tokenHash))
-        .for("update")
-        .limit(1);
+    return (this.db as any).transaction(async (tx: any) => {
+      const [record] = await this.adapter.selectWithLock(
+        tx,
+        emailVerificationsTable,
+        eq(emailVerificationsTable.tokenHash, tokenHash),
+        {
+          id: emailVerificationsTable.id,
+          userId: emailVerificationsTable.userId,
+          expiresAt: emailVerificationsTable.expiresAt,
+          usedAt: emailVerificationsTable.usedAt,
+        },
+        1,
+      );
 
       if (!record) {
         fail("Token verifikasi tidak valid", "INVALID_VERIFICATION_TOKEN", 401);
+      }
+
+      const [user] = await this.adapter.selectWithLock(
+        tx,
+        usersTable,
+        eq(usersTable.id, record.userId),
+        { id: usersTable.id, isActive: usersTable.isActive, deletedAt: usersTable.deletedAt },
+        1,
+      );
+
+      if (!user || user.isActive === false || user.deletedAt) {
+        fail("Akun tidak aktif atau telah dinonaktifkan", "ACCOUNT_DISABLED", 403);
       }
 
       if (record.usedAt) {
@@ -95,7 +130,8 @@ export class VerificationService {
         );
       }
 
-      if (record.expiresAt < new Date()) {
+      const expiresAt = record.expiresAt instanceof Date ? record.expiresAt : new Date(record.expiresAt);
+      if (expiresAt < new Date()) {
         fail(
           "Token verifikasi sudah expired",
           "VERIFICATION_TOKEN_EXPIRED",
@@ -105,40 +141,36 @@ export class VerificationService {
 
       // Tandai token sebagai used
       await tx
-        .update(emailVerifications)
+        .update(emailVerificationsTable)
         .set({ usedAt: new Date() })
-        .where(eq(emailVerifications.id, record.id));
+        .where(eq(emailVerificationsTable.id, record.id));
 
       // Set user.isEmailVerified = true
-      const [user] = await tx
-        .update(users)
+      const [updatedUser] = await tx
+        .update(usersTable)
         .set({ isEmailVerified: true, updatedAt: new Date() })
-        .where(eq(users.id, record.userId))
-        .returning({ id: users.id, email: users.email });
+        .where(eq(usersTable.id, record.userId))
+        .returning({ id: usersTable.id, email: usersTable.email });
 
-      return { userId: user.id, email: user.email };
+      return { userId: updatedUser.id, email: updatedUser.email };
     });
   }
 
   /**
    * Resend verification token untuk user yang belum terverifikasi.
-   * Return plain token + userId.
    */
   async resendVerification(
     email: string,
   ): Promise<{ token: string; userId: string }> {
     const normalizedEmail = email.toLowerCase().trim();
+    const usersTable = this.adapter.tables.users;
 
-    // Cari user
     const user = await this.db.query.users.findFirst({
-      where: eq(users.email, normalizedEmail),
-      columns: { id: true, isEmailVerified: true, isActive: true },
+      where: eq(usersTable.email, normalizedEmail),
+      columns: { id: true, isEmailVerified: true, isActive: true, deletedAt: true },
     });
 
-    // Untuk keamanan, selalu return sukses meski email tidak ditemukan
-    // (mencegah email enumeration). Tapi tetap throw internal agar
-    // route handler bisa membedakan.
-    if (!user || !user.isActive) {
+    if (!user || user.isActive === false || user.deletedAt) {
       fail("Email tidak ditemukan", "USER_NOT_FOUND", 404);
     }
 
@@ -154,19 +186,27 @@ export class VerificationService {
 
   /**
    * Buat kode OTP 6-digit untuk user (code-based flow).
-   * Return plain code (untuk dikirim via email).
-   * Hash disimpan di tabel `emailVerifications` — tabel yang sama dengan link flow.
-   * @param ttlMinutes - TTL dalam menit (default: VERIFICATION_TTL_MINUTES = 15)
    */
   async createVerificationCode(
     userId: string,
     ttlMinutes: number = VERIFICATION_TTL_MINUTES,
   ): Promise<string> {
+    const emailVerificationsTable = this.adapter.tables.emailVerifications;
     const code = generateOtpCode();
     const codeHash = await hashToken(code);
     const expiresAt = new Date(Date.now() + ttlMinutes * 60 * 1000);
 
-    await this.db.insert(emailVerifications).values({
+    // Invalidate/hapus kode verifikasi lama yang belum digunakan untuk user ini
+    await (this.db as any)
+      .delete(emailVerificationsTable)
+      .where(
+        and(
+          eq(emailVerificationsTable.userId, userId),
+          isNull(emailVerificationsTable.usedAt),
+        ),
+      );
+
+    await (this.db as any).insert(emailVerificationsTable).values({
       userId,
       tokenHash: codeHash,
       expiresAt,
@@ -177,52 +217,47 @@ export class VerificationService {
 
   /**
    * Verifikasi email dari kode OTP + email.
-   * - Cari user berdasarkan email
-   * - Hash kode, cari di emailVerifications milik userId tersebut
-   * - Validasi: ada, belum dipakai, belum expired
-   * - Set isEmailVerified = true
-   * - Tandai token sebagai used
    */
   async verifyEmailCode(
     email: string,
     code: string,
   ): Promise<{ userId: string; email: string }> {
     const normalizedEmail = email.toLowerCase().trim();
-
-    // Cari user berdasarkan email
-    const user = await this.db.query.users.findFirst({
-      where: eq(users.email, normalizedEmail),
-      columns: { id: true, isEmailVerified: true, isActive: true },
-    });
-
-    if (!user || !user.isActive) {
-      fail("Email atau kode tidak valid", "INVALID_VERIFICATION_CODE", 401);
-    }
-
-    if (user.isEmailVerified) {
-      fail("Email sudah terverifikasi", "ALREADY_VERIFIED", 400);
-    }
-
+    const usersTable = this.adapter.tables.users;
+    const emailVerificationsTable = this.adapter.tables.emailVerifications;
     const codeHash = await hashToken(code);
 
-    return this.db.transaction(async (tx) => {
-      // Cari record berdasarkan userId + codeHash (bukan hanya hash)
-      // agar satu kode tidak bisa dipakai untuk verifikasi user lain
-      const [record] = await tx
-        .select({
-          id: emailVerifications.id,
-          expiresAt: emailVerifications.expiresAt,
-          usedAt: emailVerifications.usedAt,
-        })
-        .from(emailVerifications)
-        .where(
-          and(
-            eq(emailVerifications.userId, user.id),
-            eq(emailVerifications.tokenHash, codeHash),
-          ),
-        )
-        .for("update")
-        .limit(1);
+    return (this.db as any).transaction(async (tx: any) => {
+      const [user] = await this.adapter.selectWithLock(
+        tx,
+        usersTable,
+        eq(usersTable.email, normalizedEmail),
+        { id: usersTable.id, isEmailVerified: usersTable.isEmailVerified, isActive: usersTable.isActive, deletedAt: usersTable.deletedAt },
+        1,
+      );
+
+      if (!user || user.isActive === false || user.deletedAt) {
+        fail("Email atau kode tidak valid", "INVALID_VERIFICATION_CODE", 401);
+      }
+
+      if (user.isEmailVerified) {
+        fail("Email sudah terverifikasi", "ALREADY_VERIFIED", 400);
+      }
+
+      const [record] = await this.adapter.selectWithLock(
+        tx,
+        emailVerificationsTable,
+        and(
+          eq(emailVerificationsTable.userId, user.id),
+          eq(emailVerificationsTable.tokenHash, codeHash),
+        ),
+        {
+          id: emailVerificationsTable.id,
+          expiresAt: emailVerificationsTable.expiresAt,
+          usedAt: emailVerificationsTable.usedAt,
+        },
+        1,
+      );
 
       if (!record) {
         fail("Email atau kode tidak valid", "INVALID_VERIFICATION_CODE", 401);
@@ -236,7 +271,8 @@ export class VerificationService {
         );
       }
 
-      if (record.expiresAt < new Date()) {
+      const expiresAt = record.expiresAt instanceof Date ? record.expiresAt : new Date(record.expiresAt);
+      if (expiresAt < new Date()) {
         fail(
           "Kode verifikasi sudah expired",
           "VERIFICATION_CODE_EXPIRED",
@@ -246,16 +282,16 @@ export class VerificationService {
 
       // Tandai kode sebagai used
       await tx
-        .update(emailVerifications)
+        .update(emailVerificationsTable)
         .set({ usedAt: new Date() })
-        .where(eq(emailVerifications.id, record.id));
+        .where(eq(emailVerificationsTable.id, record.id));
 
       // Set user.isEmailVerified = true
       const [updatedUser] = await tx
-        .update(users)
+        .update(usersTable)
         .set({ isEmailVerified: true, updatedAt: new Date() })
-        .where(eq(users.id, user.id))
-        .returning({ id: users.id, email: users.email });
+        .where(eq(usersTable.id, user.id))
+        .returning({ id: usersTable.id, email: usersTable.email });
 
       return { userId: updatedUser.id, email: updatedUser.email };
     });
@@ -263,21 +299,20 @@ export class VerificationService {
 
   /**
    * Resend OTP code untuk user yang belum terverifikasi.
-   * Return plain code + userId.
-   * @param ttlMinutes - TTL dalam menit (default: VERIFICATION_TTL_MINUTES = 15)
    */
   async resendVerificationCode(
     email: string,
     ttlMinutes?: number,
   ): Promise<{ code: string; userId: string }> {
     const normalizedEmail = email.toLowerCase().trim();
+    const usersTable = this.adapter.tables.users;
 
     const user = await this.db.query.users.findFirst({
-      where: eq(users.email, normalizedEmail),
-      columns: { id: true, isEmailVerified: true, isActive: true },
+      where: eq(usersTable.email, normalizedEmail),
+      columns: { id: true, isEmailVerified: true, isActive: true, deletedAt: true },
     });
 
-    if (!user || !user.isActive) {
+    if (!user || user.isActive === false || user.deletedAt) {
       fail("Email tidak ditemukan", "USER_NOT_FOUND", 404);
     }
 

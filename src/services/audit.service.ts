@@ -15,9 +15,11 @@ export interface AuditPayload {
 }
 
 export class AuditService {
-  constructor(private readonly analytics: AnalyticsEngineDataset) {}
+  constructor(private readonly analytics?: AnalyticsEngineDataset) {}
 
   log(payload: AuditPayload): void {
+    if (!this.analytics) return;
+
     this.analytics.writeDataPoint({
       // blobs = string fields (maks 20)
       blobs: [
