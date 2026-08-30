@@ -187,8 +187,9 @@ Pada versi **`v1.4.0`**, terdapat beberapa hardening dan validasi penting yang p
    - Endpoint `POST /auth/resend-verification` kini hanya menaikkan counter rate limit jika akun user valid (mencegah lockout prematur).
 3. **Penyelarasan Username Case-Insensitive**:
    - Endpoint `PUT /api/settings/profile` otomatis menormalisasi username menjadi huruf kecil (lowercase) untuk mencegah collision atau duplikasi username dengan variasi kapitalisasi.
-4. **Google OAuth Open Redirect Protection**:
+4. **Google OAuth Open Redirect Protection & Wildcard Origins**:
    - Parameter `redirectUrl` pada flow Google Login selalu diverifikasi secara *fail-closed* terhadap daftar `ALLOWED_ORIGINS` atau `APP_URL`.
+   - Mulai `v1.4.1`, `ALLOWED_ORIGINS` mendukung pola wildcard subdomain (contoh: `*.web-rakkita-dev.pages.dev` atau `https://*.web-rakkita-dev.pages.dev`), memudahkan integrasi frontend Cloudflare Pages preview deployments tanpa perlu mendaftarkan setiap hash commit secara manual.
 
 ---
 

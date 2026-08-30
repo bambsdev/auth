@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [1.4.1] - 2026-08-30
+
+### Added
+- **Wildcard Subdomain Matching in `ALLOWED_ORIGINS`**: Added support for wildcard domain patterns (e.g. `*.web-rakkita-dev.pages.dev` or `https://*.web-rakkita-dev.pages.dev`) in `ALLOWED_ORIGINS` to support dynamic preview deployments (such as Cloudflare Pages commit/branch preview URLs) safely.
+- **Domain Boundary & Protocol Hardening**: Strict validation preventing prefix/suffix domain spoofing and enforcing protocol safety on redirect URLs.
+- **Safe Fallback Redirect Selection**: Hardened OAuth error fallback redirect to ignore wildcard patterns and pick the first concrete origin or `APP_URL`.
+
 ## [1.4.0] - 2026-08-27
 
 ### Added

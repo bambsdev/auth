@@ -970,8 +970,12 @@ export function createAuthRoutes<
           .split(",")
           .map((o: string) => o.trim())
           .filter(Boolean);
-        if (allowedOrigins.length > 0) {
-          redirectUrl = `${allowedOrigins[0]}/google-callback`;
+        const concreteOrigin = allowedOrigins.find((o: string) => !o.includes("*"));
+        if (concreteOrigin) {
+          const base = concreteOrigin.startsWith("http") ? concreteOrigin : `https://${concreteOrigin}`;
+          try {
+            redirectUrl = `${new URL(base).origin}/google-callback`;
+          } catch {}
         } else if (c.env.APP_URL) {
           try {
             redirectUrl = `${new URL(c.env.APP_URL).origin}/google-callback`;

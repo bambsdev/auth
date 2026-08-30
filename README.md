@@ -44,7 +44,7 @@ This package follows a **Clean Service Layer Architecture**. Business logic is s
 - **Web Flow**: Standard redirect flow with RFC 6750 compliant **URL Fragment delivery** (`#accessToken=...`) preventing token leakage in logs and referrers.
 - **Mobile Flow**: Direct Google ID token verification via Native SDKs (Android/iOS).
 - **Smart Account Linking**: Atomically links Google logins to existing accounts with matching email addresses.
-- **Open Redirect Protection**: Strict fail-closed validation of redirect URLs against `ALLOWED_ORIGINS` and `APP_URL`.
+- **Open Redirect Protection**: Strict fail-closed validation of redirect URLs against `ALLOWED_ORIGINS` (supports wildcard subdomains like `*.web-rakkita-dev.pages.dev` or `https://*.pages.dev`) and `APP_URL`.
 
 ### 👤 Avatar Uploads (Cloudflare R2 + Workers AI Moderation)
 - **Built-in AI Moderation**: Uses `@cf/microsoft/resnet-50` to classify uploaded avatars.
@@ -154,7 +154,7 @@ Example `wrangler.jsonc` configuration:
   "compatibility_date": "2024-09-23",
   "vars": {
     "APP_URL": "https://myapp.com",
-    "ALLOWED_ORIGINS": "https://myapp.com,https://admin.myapp.com",
+    "ALLOWED_ORIGINS": "https://myapp.com,https://admin.myapp.com,https://*.web-rakkita-dev.pages.dev",
     "EMAIL_FROM": "No-Reply <noreply@myapp.com>",
     "BUCKET_PUBLIC_URL": "https://pub-xxx.r2.dev",
     "GOOGLE_CLIENT_ID": "xxx.apps.googleusercontent.com",
