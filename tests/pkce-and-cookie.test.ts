@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { generateCodeVerifier, generateCodeChallenge, base64UrlEncode } from "../src/utils/pkce";
-import { getAuthCookieOptions, clearAuthCookies } from "../src/routes/factory/auth.factory";
+import { getAuthCookieOptions, clearAuthCookies, getAuthCookieName } from "../src/routes/factory/auth.factory";
 import { OpenAPIHono } from "@hono/zod-openapi";
 import { createAuthRoutes } from "../src/routes/factory/auth.factory";
 
@@ -80,10 +80,15 @@ describe("Adaptive Auth Cookie Options (Universal & Configurable)", () => {
     expect(opts.secure).toBe(false);
   });
 
-  test("clearAuthCookies executes cookie deletion with domain and path safely", async () => {
+  test("getAuthCookieName defaults to refresh_token and supports custom COOKIE_NAME", () => {
+    expect(getAuthCookieName({ env: {} })).toBe("refresh_token");
+    expect(getAuthCookieName({ env: { COOKIE_NAME: "dev_rf" } })).toBe("dev_rf");
+  });
+
+  test("clearAuthCookies deletes custom COOKIE_NAME and fallback refresh_token", async () => {
     const app = new OpenAPIHono();
     app.post("/test-logout", (c) => {
-      (c as any).env = { COOKIE_DOMAIN: ".example.com" };
+      (c as any).env = { COOKIE_DOMAIN: ".example.com", COOKIE_NAME: "my_custom_rf" };
       clearAuthCookies(c);
       return c.json({ ok: true });
     });
@@ -93,9 +98,8 @@ describe("Adaptive Auth Cookie Options (Universal & Configurable)", () => {
       headers: { host: "api.example.com" },
     });
     expect(res.status).toBe(200);
-    const setCookie = res.headers.get("Set-Cookie");
-    expect(setCookie).toBeDefined();
-    expect(setCookie).toContain("refresh_token=");
-    expect(setCookie).toContain("Domain=.example.com");
+    const setCookies = res.headers.getSetCookie();
+    expect(setCookies.some((cookie) => cookie.includes("my_custom_rf="))).toBe(true);
+    expect(setCookies.some((cookie) => cookie.includes("refresh_token="))).toBe(true);
   });
 });

@@ -94,16 +94,36 @@ export function getAuthCookieOptions(
 }
 
 /**
+ * Mendapatkan nama cookie refresh token (default: "refresh_token", dapat di-override via COOKIE_NAME).
+ */
+export function getAuthCookieName(c: any): string {
+  const custom = c.env?.COOKIE_NAME;
+  return typeof custom === "string" && custom.trim().length > 0
+    ? custom.trim()
+    : "refresh_token";
+}
+
+/**
  * Menghapus cookie autentikasi secara bersih di semua kemungkinan scope (domain dan host-only).
  */
 export function clearAuthCookies(c: any) {
   const opts = getAuthCookieOptions(c);
+  const cookieName = getAuthCookieName(c);
+
   if (opts.domain) {
-    deleteCookie(c, "refresh_token", { path: "/", domain: opts.domain });
-    deleteCookie(c, "refresh_token", { path: "/auth", domain: opts.domain });
+    deleteCookie(c, cookieName, { path: "/", domain: opts.domain });
+    deleteCookie(c, cookieName, { path: "/auth", domain: opts.domain });
+    if (cookieName !== "refresh_token") {
+      deleteCookie(c, "refresh_token", { path: "/", domain: opts.domain });
+      deleteCookie(c, "refresh_token", { path: "/auth", domain: opts.domain });
+    }
   }
-  deleteCookie(c, "refresh_token", { path: "/" });
-  deleteCookie(c, "refresh_token", { path: "/auth" });
+  deleteCookie(c, cookieName, { path: "/" });
+  deleteCookie(c, cookieName, { path: "/auth" });
+  if (cookieName !== "refresh_token") {
+    deleteCookie(c, "refresh_token", { path: "/" });
+    deleteCookie(c, "refresh_token", { path: "/auth" });
+  }
 }
 
 
@@ -372,7 +392,8 @@ export function createAuthRoutes<
       if (clientType === "web") {
         const policy = TOKEN_POLICY[clientType] ?? TOKEN_POLICY.web;
         const cookieOpts = getAuthCookieOptions(c, policy.refreshToken.expiresInSeconds);
-        setCookie(c, "refresh_token", tokens.refreshToken, cookieOpts);
+        const cookieName = getAuthCookieName(c);
+        setCookie(c, cookieName, tokens.refreshToken, cookieOpts);
       }
 
       return c.json(
@@ -438,8 +459,9 @@ export function createAuthRoutes<
   authRoutes.openapi(refreshRoute, async (c: any) => {
     let { refreshToken } = c.req.valid("json");
     let fromCookie = false;
+    const cookieName = getAuthCookieName(c);
     if (!refreshToken) {
-      refreshToken = getCookie(c, "refresh_token");
+      refreshToken = getCookie(c, cookieName) || (cookieName !== "refresh_token" ? getCookie(c, "refresh_token") : undefined);
       if (refreshToken) fromCookie = true;
     }
     if (!refreshToken) {
@@ -468,7 +490,7 @@ export function createAuthRoutes<
       // Jika dari awal dikirim via cookie, asumsikan web client dan set via cookie
       if (fromCookie) {
         const cookieOpts = getAuthCookieOptions(c, 30 * 24 * 60 * 60);
-        setCookie(c, "refresh_token", tokens.refreshToken, cookieOpts);
+        setCookie(c, cookieName, tokens.refreshToken, cookieOpts);
         returnRefreshToken = undefined;
       }
 
@@ -521,7 +543,8 @@ export function createAuthRoutes<
   authRoutes.openapi(logoutRoute, async (c: any) => {
     let { refreshToken } = c.req.valid("json");
     if (!refreshToken) {
-      refreshToken = getCookie(c, "refresh_token");
+      const cookieName = getAuthCookieName(c);
+      refreshToken = getCookie(c, cookieName) || (cookieName !== "refresh_token" ? getCookie(c, "refresh_token") : undefined);
     }
     const { authService, audit } = makeServices(c, dialect);
 
@@ -1173,7 +1196,8 @@ export function createAuthRoutes<
       if (clientType === "web") {
         const policy = TOKEN_POLICY[clientType] ?? TOKEN_POLICY.web;
         const cookieOpts = getAuthCookieOptions(c, policy.refreshToken.expiresInSeconds);
-        setCookie(c, "refresh_token", result.refreshToken, cookieOpts);
+        const cookieName = getAuthCookieName(c);
+        setCookie(c, cookieName, result.refreshToken, cookieOpts);
       }
 
       const validRedirect = isAllowedRedirectUrl(parsed.redirectUrl, c.env) ? parsed.redirectUrl : undefined;
@@ -1300,13 +1324,10 @@ export function createAuthRoutes<
       };
 
       if (clientType === "web") {
-        setCookie(c, "refresh_token", result.refreshToken, {
-          httpOnly: true,
-          secure: true,
-          sameSite: "Lax",
-          path: "/",
-          maxAge: 30 * 24 * 60 * 60,
-        });
+        const policy = TOKEN_POLICY[clientType] ?? TOKEN_POLICY.web;
+        const cookieOpts = getAuthCookieOptions(c, policy.refreshToken.expiresInSeconds);
+        const cookieName = getAuthCookieName(c);
+        setCookie(c, cookieName, result.refreshToken, cookieOpts);
       }
 
       return c.json(responsePayload, 200);

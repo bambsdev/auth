@@ -15,6 +15,7 @@ export type SharedAuthBindings = {
   RESEND_API_KEY: string;
   APP_URL: string; // base URL untuk verification link
   EMAIL_FROM?: string; // (Opsional) email pengirim default
+  COOKIE_NAME?: string; // (Opsional) Custom cookie name (default: "refresh_token") untuk isolasi multi-environment
   COOKIE_DOMAIN?: string; // (Opsional) Root cookie domain (contoh: .example.com) untuk first-party cookie sharing
   COOKIE_SAME_SITE?: "Lax" | "Strict" | "None"; // (Opsional) SameSite policy override
   COOKIE_SECURE?: string | boolean; // (Opsional) Secure flag override (default true)

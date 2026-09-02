@@ -5,6 +5,19 @@ Semua perubahan penting pada paket `@bambsdev/auth` didokumentasikan dalam berka
 Format berkas ini mengacu pada [Keep a Changelog](https://keepachangelog.com/id/1.0.0/),
 dan proyek ini mematuhi [Semantic Versioning](https://semver.org/lang/id/).
 
+## [1.4.5] - 2026-09-02
+
+### Ditambahkan (Added)
+- **Dukungan Nama Cookie Dinamis (`COOKIE_NAME`)**:
+  - Menambahkan opsi binding `COOKIE_NAME` pada `SharedAuthBindings` (default: `"refresh_token"`).
+  - Helper `getAuthCookieName(c)` untuk resolusi nama cookie dinamis pada alur login, refresh, callback OAuth, dan logout.
+  - Memungkinkan isolasi sesi multi-environment secara independen (misal `dev_rf`, `staging_rf`, `rakkita_rf`), sehingga pengguna dapat membuka tab Production, Staging, dan Dev secara bersamaan dalam satu browser tanpa terjadi tabrakan (*cookie collision/shadowing*).
+  - Pembersihan menyeluruh pada `clearAuthCookies` yang menghapus nama cookie kustom sekaligus fallback nama default.
+- **Pembaruan Dokumentasi (`README.md`)**:
+  - Dokumentasi konfigurasi cookie dinamis multi-environment dan RFC 7636 PKCE.
+
+---
+
 ## [1.4.4] - 2026-09-02
 
 ### Ditambahkan (Added)

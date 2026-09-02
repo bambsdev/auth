@@ -34,7 +34,7 @@ This package follows a **Clean Service Layer Architecture**. Business logic is s
 - **Strict Session Limits (Max 10)**: Prevents session hoarding by automatically revoking the oldest session (FIFO) when a user exceeds 10 active devices/sessions.
 - **Session Control**: List active devices, revoke individual sessions, or execute a global "Logout from all devices" command.
 - **Robust Rate Limiting (CF KV/Cache)**: Strict rate limits built-in to prevent brute-force attacks on login, registration, OTP verification, and password resets, returning standard `retryAfterSeconds` and `remainingAttempts` payloads.
-- **Secure Web Cookies**: Refresh tokens for `web` clients are exclusively delivered and verified via `HttpOnly`, `Secure`, `SameSite=Lax` cookies to prevent XSS exfiltration.
+- **Adaptive Cookie Management**: Configurable cookie name (`COOKIE_NAME`) and domain (`COOKIE_DOMAIN`) with `HttpOnly`, `Secure`, and adaptive `SameSite` (`Lax` for first-party root sharing, `None` for cross-site dev/preview environments).
 - **Two-Tier Edge Cache**: L1 Cache API + L2 KV caching with negative caching (`"0"`) reducing KV read costs by up to 99%.
 
 ### 📨 Flexible Email Verification & Password Reset
@@ -43,11 +43,12 @@ This package follows a **Clean Service Layer Architecture**. Business logic is s
 - **Secure Password Reset**: Transactional password reset with 64-character hex tokens and automatic invalidation of old unused tokens.
 - **Password Reuse Prevention**: Rejects password changes if the new password is identical to the current one.
 
-### 🌐 Google OAuth 2.0 Integration
+### 🌐 Google OAuth 2.0 & RFC 7636 PKCE
+- **PKCE Defense**: Full RFC 7636 PKCE (`code_challenge` S256 + `code_verifier`) preventing authorization code interception and injection attacks.
 - **Web Flow**: Standard redirect flow with RFC 6750 compliant **URL Fragment delivery** (`#accessToken=...`) preventing token leakage in logs and referrers.
 - **Mobile Flow**: Direct Google ID token verification via Native SDKs (Android/iOS).
 - **Smart Account Linking**: Atomically links Google logins to existing accounts with matching email addresses.
-- **Open Redirect Protection**: Strict fail-closed validation of redirect URLs against `ALLOWED_ORIGINS` (supports wildcard subdomains like `*.web-rakkita-dev.pages.dev` or `https://*.pages.dev`) and `APP_URL`.
+- **Open Redirect Protection**: Strict fail-closed validation of redirect URLs against `ALLOWED_ORIGINS` (supports wildcard subdomains like `*.example.pages.dev` or `https://*.pages.dev`) and `APP_URL`.
 
 ### 👤 Avatar Uploads (Cloudflare R2 + Workers AI Moderation)
 - **Built-in AI Moderation**: Uses `@cf/microsoft/resnet-50` to classify uploaded avatars.
@@ -157,7 +158,10 @@ Example `wrangler.jsonc` configuration:
   "compatibility_date": "2024-09-23",
   "vars": {
     "APP_URL": "https://myapp.com",
-    "ALLOWED_ORIGINS": "https://myapp.com,https://admin.myapp.com,https://*.web-rakkita-dev.pages.dev",
+    "ALLOWED_ORIGINS": "https://myapp.com,https://admin.myapp.com,https://*.pages.dev",
+    "COOKIE_NAME": "my_auth_rf", // Optional, defaults to "refresh_token"
+    "COOKIE_DOMAIN": ".myapp.com", // Optional, enables first-party root cookie sharing
+    "COOKIE_SAME_SITE": "Lax", // Optional, "Lax" | "Strict" | "None"
     "EMAIL_FROM": "No-Reply <noreply@myapp.com>",
     "BUCKET_PUBLIC_URL": "https://pub-xxx.r2.dev",
     "GOOGLE_CLIENT_ID": "xxx.apps.googleusercontent.com",
