@@ -113,10 +113,15 @@ export function isAllowedRedirectUrl(
 }
 
 /**
- * Mengambil IP klien dari header CF-Connecting-IP terpercaya.
+ * Mengambil IP klien dari header edge terpercaya (CF-Connecting-IP, X-Real-IP, X-Forwarded-For).
  */
 export function getIp(c: AppContext): string {
-  return c.req.header("CF-Connecting-IP") ?? "127.0.0.1";
+  return (
+    c.req.header("CF-Connecting-IP") ||
+    c.req.header("X-Real-IP") ||
+    c.req.header("X-Forwarded-For")?.split(",")[0]?.trim() ||
+    "127.0.0.1"
+  );
 }
 
 /**
