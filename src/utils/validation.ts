@@ -21,11 +21,12 @@ export const registerSchema = z.object({
     .transform((v) => v.toLowerCase().trim()),
   password: z
     .string()
-    .min(6, "Password minimal 6 karakter")
+    .min(8, "Password minimal 8 karakter")
+    .max(64, "Password maksimal 64 karakter")
     .regex(/[a-zA-Z]/, "Password harus mengandung huruf")
     .regex(/[0-9]/, "Password harus mengandung angka")
-    .openapi({ example: "pass12", description: "Kata sandi" }),
-  fullName: z.string().min(1, "Nama lengkap tidak boleh kosong").optional()
+    .openapi({ example: "Password123", description: "Kata sandi" }),
+  fullName: z.string().min(1, "Nama lengkap tidak boleh kosong").max(100, "Nama lengkap maksimal 100 karakter").optional()
     .openapi({ example: "John Doe", description: "Nama lengkap pengguna" }),
 }).openapi("RegisterRequest");
 
@@ -47,14 +48,14 @@ export const loginSchema = z.object({
 // ── Refresh Token ─────────────────────────────────────────────────────────────
 
 export const refreshSchema = z.object({
-  refreshToken: z.string().min(1, "Refresh token wajib diisi")
+  refreshToken: z.string().min(1, "Refresh token wajib diisi").optional()
     .openapi({ example: "eyJhbG...", description: "JWT Refresh Token" }),
 }).openapi("RefreshRequest");
 
 // ── Logout ────────────────────────────────────────────────────────────────────
 
 export const logoutSchema = z.object({
-  refreshToken: z.string().optional()
+  refreshToken: z.string().min(1).optional()
     .openapi({ example: "eyJhbG...", description: "Refresh Token untuk di-revoke" }),
 }).openapi("LogoutRequest");
 
@@ -116,10 +117,11 @@ export const resetPasswordSchema = z.object({
     .openapi({ example: "e89b12d3...", description: "Token unik 64 karakter hex" }),
   newPassword: z
     .string()
-    .min(6, "Password baru minimal 6 karakter")
+    .min(8, "Password baru minimal 8 karakter")
+    .max(64, "Password baru maksimal 64 karakter")
     .regex(/[a-zA-Z]/, "Password baru harus mengandung huruf")
     .regex(/[0-9]/, "Password baru harus mengandung angka")
-    .openapi({ example: "pass12", description: "Password baru" }),
+    .openapi({ example: "Password123", description: "Password baru" }),
 }).openapi("ResetPasswordRequest");
 
 // ── Google Token (Mobile Flow) ────────────────────────────────────────────────
@@ -146,7 +148,7 @@ export const updateProfileSchema = z.object({
   fullName: z
     .string()
     .min(1, "Nama lengkap tidak boleh kosong")
-    .max(255, "Nama lengkap maksimal 255 karakter")
+    .max(100, "Nama lengkap maksimal 100 karakter")
     .optional()
     .openapi({ example: "John Doe", description: "Nama lengkap baru" }),
 }).openapi("UpdateProfileRequest");
@@ -158,10 +160,11 @@ export const changePasswordSchema = z.object({
     .openapi({ example: "OldPassword123!", description: "Password saat ini" }),
   newPassword: z
     .string()
-    .min(6, "Password baru minimal 6 karakter")
+    .min(8, "Password baru minimal 8 karakter")
+    .max(64, "Password baru maksimal 64 karakter")
     .regex(/[a-zA-Z]/, "Password baru harus mengandung huruf")
     .regex(/[0-9]/, "Password baru harus mengandung angka")
-    .openapi({ example: "pass12", description: "Password baru" }),
+    .openapi({ example: "Password123", description: "Password baru" }),
   clientType: clientTypeSchema,
 }).openapi("ChangePasswordRequest");
 

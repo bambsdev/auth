@@ -173,6 +173,7 @@ describe("AuthService Unit Tests (TDD)", () => {
       },
       transaction: async (callback: (tx: any) => Promise<any>) => {
         const mockTx = {
+          query: mockDb.query,
           select: () => {
             return {
               from: (table: any) => {

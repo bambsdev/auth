@@ -31,7 +31,10 @@ This package follows a **Clean Service Layer Architecture**. Business logic is s
 
 ### 🛡️ Core Authentication & Session Management
 - **Token Rotation & Reuse Detection**: Refresh token rotation with family-based tracking. If an old token is reused, all tokens in the family are automatically revoked.
+- **Strict Session Limits (Max 10)**: Prevents session hoarding by automatically revoking the oldest session (FIFO) when a user exceeds 10 active devices/sessions.
 - **Session Control**: List active devices, revoke individual sessions, or execute a global "Logout from all devices" command.
+- **Robust Rate Limiting (CF KV/Cache)**: Strict rate limits built-in to prevent brute-force attacks on login, registration, OTP verification, and password resets, returning standard `retryAfterSeconds` and `remainingAttempts` payloads.
+- **Secure Web Cookies**: Refresh tokens for `web` clients are exclusively delivered and verified via `HttpOnly`, `Secure`, `SameSite=Lax` cookies to prevent XSS exfiltration.
 - **Two-Tier Edge Cache**: L1 Cache API + L2 KV caching with negative caching (`"0"`) reducing KV read costs by up to 99%.
 
 ### 📨 Flexible Email Verification & Password Reset

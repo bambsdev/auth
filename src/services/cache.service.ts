@@ -85,39 +85,60 @@ export class CacheService {
 
   // ── Rate Limit ────────────────────────────────────────────────────────────
 
-  async getRateLimit(ip: string): Promise<number> {
+  async getRateLimit(ip: string): Promise<{ count: number; resetAt: number }> {
     const key = `ratelimit:${ip}`;
 
     const cached = await this.cache.match(this.key(key));
-    if (cached) return parseInt(await cached.text(), 10);
+    if (cached) {
+      try {
+        return await cached.json();
+      } catch {
+        // fallback jika cache lama bukan json
+      }
+    }
 
     const kvVal = await this.kv.get(key);
-    const count = kvVal ? parseInt(kvVal, 10) : 0;
+    let count = 0;
+    let resetAt = 0;
+    
+    if (kvVal) {
+      try {
+        const parsed = JSON.parse(kvVal);
+        count = parsed.count || 0;
+        resetAt = parsed.resetAt || 0;
+      } catch {
+        count = parseInt(kvVal, 10);
+        resetAt = Date.now() + 60000;
+      }
+    }
 
-    // Cache hasil (30 detik) untuk kurangi KV reads saat banyak attempt
-    await this.cache.put(this.key(key), this.response(String(count), 30));
-    return count;
+    await this.cache.put(this.key(key), this.responseJson(JSON.stringify({ count, resetAt }), 30));
+    return { count, resetAt };
   }
 
   async incrementRateLimit(
     ip: string,
     windowSeconds: number = RATE_LIMIT_WINDOW,
-  ): Promise<number> {
+  ): Promise<{ count: number; resetAt: number }> {
     const key = `ratelimit:${ip}`;
-    const kvVal = await this.kv.get(key);
-    const current = kvVal ? parseInt(kvVal, 10) : 0;
-    const newCount = current + 1;
+    const currentData = await this.getRateLimit(ip);
+    const newCount = currentData.count + 1;
+    
+    const resetAt = currentData.resetAt && currentData.resetAt > Date.now() 
+      ? currentData.resetAt 
+      : Date.now() + (windowSeconds * 1000);
 
-    await this.kv.put(key, String(newCount), {
+    const val = JSON.stringify({ count: newCount, resetAt });
+
+    await this.kv.put(key, val, {
       expirationTtl: windowSeconds,
     });
 
-    // Update cache dengan nilai terbaru
     await this.cache.put(
       this.key(key),
-      this.response(String(newCount), Math.min(30, windowSeconds)),
+      this.responseJson(val, Math.min(30, windowSeconds)),
     );
-    return newCount;
+    return { count: newCount, resetAt };
   }
 
   async clearRateLimit(ip: string): Promise<void> {
@@ -158,6 +179,15 @@ export class CacheService {
       headers: {
         "Cache-Control": `public, max-age=${maxAge}`,
         "Content-Type": "text/plain",
+      },
+    });
+  }
+
+  private responseJson(value: string, maxAge: number): Response {
+    return new Response(value, {
+      headers: {
+        "Cache-Control": `public, max-age=${maxAge}`,
+        "Content-Type": "application/json",
       },
     });
   }

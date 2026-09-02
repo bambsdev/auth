@@ -134,7 +134,7 @@ describe("ImageFilterService Unit Tests (TDD)", () => {
     }
   });
 
-  test("should fail-open and allow image if AI model throws error", async () => {
+  test("should fail-closed and reject image if AI model throws 429 error", async () => {
     const mockAi = createMockAi(new Error("Model quota exceeded (429)"));
     const service = new ImageFilterService(mockAi);
 
@@ -147,7 +147,8 @@ describe("ImageFilterService Unit Tests (TDD)", () => {
 
     try {
       const result = await service.isImageAllowed("https://example.com/image.jpg");
-      expect(result.allowed).toBe(true);
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain("Batas penggunaan");
     } finally {
       global.fetch = originalFetch;
     }

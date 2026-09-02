@@ -142,19 +142,17 @@ export class ImageFilterService implements IImageFilterService {
           }
         }
       } catch (detErr: any) {
-        // Cek Quota Exceeded (429)
         if (detErr?.message?.includes("429") || detErr?.status === 429) {
-          console.warn("[image-filter] Quota exceeded (429), allowing image.");
-          return { allowed: true };
+          console.warn("[image-filter] Quota exceeded (429), failing close.");
+          return { allowed: false, reason: "Batas penggunaan fitur deteksi gambar harian tercapai. Silakan coba unggah kembali esok hari." };
         }
         console.warn("[image-filter] Classification failed:", detErr?.message ?? detErr);
+        return { allowed: false, reason: "Deteksi keamanan gambar gagal. Silakan coba lagi nanti." };
       }
-
       return { allowed: true };
     } catch (err: any) {
       console.error("[image-filter] Error:", err?.message ?? err);
-      // Fail-open
-      return { allowed: true };
+      return { allowed: false, reason: "Sistem gagal memproses gambar." };
     }
   }
 
@@ -202,16 +200,16 @@ export class ImageFilterService implements IImageFilterService {
         }
       } catch (detErr: any) {
         if (detErr?.message?.includes("429") || detErr?.status === 429) {
-          console.warn("[image-filter] Quota exceeded (429 - Buffer), allowing image.");
-          return { allowed: true };
+          console.warn("[image-filter] Quota exceeded (429 - Buffer), failing close.");
+          return { allowed: false, reason: "Batas penggunaan fitur deteksi gambar harian tercapai. Silakan coba unggah kembali esok hari." };
         }
         console.warn("[image-filter] Classification failed (buffer):", detErr?.message ?? detErr);
+        return { allowed: false, reason: "Deteksi keamanan gambar gagal. Silakan coba lagi nanti." };
       }
-
       return { allowed: true };
     } catch (err: any) {
       console.error("[image-filter] Buffer filter error:", err?.message ?? err);
-      return { allowed: true };
+      return { allowed: false, reason: "Sistem gagal memproses gambar." };
     }
   }
 

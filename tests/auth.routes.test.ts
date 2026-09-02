@@ -546,7 +546,10 @@ describe("Hono Auth Routes Integration Tests (TDD)", () => {
     expect(res.status).toBe(200);
     const json = await res.json();
     expect(json.data.accessToken).toBeDefined();
-    expect(json.data.refreshToken).toBeDefined();
+    expect(json.data.refreshToken).toBeUndefined();
+    const setCookie = res.headers.get("Set-Cookie");
+    expect(setCookie).toContain("refresh_token=");
+    expect(setCookie).toContain("HttpOnly");
   });
 
   test("POST /auth/login should return 401 for incorrect credentials", async () => {
@@ -572,6 +575,7 @@ describe("Hono Auth Routes Integration Tests (TDD)", () => {
     expect(res.status).toBe(401);
     const json = await res.json();
     expect(json.error.code).toBe("INVALID_CREDENTIALS");
+    expect(json.error.remainingAttempts).toBeDefined();
   });
 
   test("POST /auth/google/token should return tokens and set httpOnly cookie for web client", async () => {
@@ -639,7 +643,8 @@ describe("Hono Auth Routes Integration Tests (TDD)", () => {
     expect(res6.status).toBe(429);
     const json = await res6.json();
     expect(json.error.code).toBe("RATE_LIMITED");
-    expect(json.error.message).toContain("5 menit");
+    expect(json.error.retryAfterSeconds).toBeDefined();
+    expect(json.error.message).toContain("Coba lagi");
   });
 
   test("POST /auth/forgot-password should enforce rate limiting and 5-minute message", async () => {
@@ -665,7 +670,8 @@ describe("Hono Auth Routes Integration Tests (TDD)", () => {
     expect(res.status).toBe(429);
     const json = await res.json();
     expect(json.error.code).toBe("RATE_LIMITED");
-    expect(json.error.message).toContain("5 menit");
+    expect(json.error.retryAfterSeconds).toBeDefined();
+    expect(json.error.message).toContain("Coba lagi");
   });
 
   test("GET /auth/google/callback with valid redirectUrl should not leak refreshToken in query params", async () => {

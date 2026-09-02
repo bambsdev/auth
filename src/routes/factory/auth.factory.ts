@@ -47,6 +47,18 @@ import {
   errorResponse,
 } from "./shared";
 
+
+function handleRateLimit(c: any, rl: { count: number, resetAt: number }, max: number, msg: string) {
+  if (rl.count >= max) {
+    const retryAfter = Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000));
+    c.header("Retry-After", String(retryAfter));
+    return c.json({
+      error: { code: "RATE_LIMITED", message: msg, retryAfterSeconds: retryAfter }
+    }, 429);
+  }
+  return null;
+}
+
 function makeServices(c: AppContext, dialect: AuthDbDialect) {
   const db = c.var.db;
   let cacheService: CacheService | undefined;
@@ -194,10 +206,19 @@ export function createAuthRoutes<
 
   authRoutes.openapi(registerRoute, async (c: any) => {
     const validated = c.req.valid("json");
-    const { db, audit, emailService, verificationService } = makeServices(c, dialect);
+    const { db, audit, emailService, verificationService, cacheService } = makeServices(c, dialect);
     const verificationMethod = c.var.emailConfig?.verificationMethod ?? "link";
+    const ip = getIp(c);
+    
+    const rl = await cacheService.getRateLimit(`register:${ip}`);
+    const limitRes = handleRateLimit(c, rl, 5, "Terlalu banyak percobaan registrasi. Coba lagi dalam beberapa saat.");
+    if (limitRes) {
+      audit.log({ event: "rate_limit_hit", ip, metadata: { endpoint: "register" } });
+      return limitRes;
+    }
 
     try {
+      await cacheService.incrementRateLimit(`register:${ip}`, 60 * 5); // 5 menit
       const registerService = new RegisterService(db, dialect);
       const user = await registerService.register(validated);
 
@@ -273,18 +294,11 @@ export function createAuthRoutes<
     const ip = getIp(c);
     const ua = c.req.header("User-Agent") ?? "";
 
-    const attempts = await cacheService.getRateLimit(ip);
-    if (attempts >= RATE_LIMIT_MAX) {
+    const rl = await cacheService.getRateLimit(ip);
+    const limitRes = handleRateLimit(c, rl, RATE_LIMIT_MAX, "Terlalu banyak percobaan login. Coba lagi dalam beberapa saat.");
+    if (limitRes) {
       audit.log({ event: "rate_limit_hit", ip, metadata: { email } });
-      return c.json(
-        {
-          error: {
-            code: "RATE_LIMITED",
-            message: "Terlalu banyak percobaan login. Coba lagi dalam 5 menit.",
-          },
-        },
-        429,
-      );
+      return limitRes;
     }
 
     try {
@@ -296,12 +310,23 @@ export function createAuthRoutes<
       await cacheService.clearRateLimit(ip);
       audit.log({ event: "login_success", clientType, ip, metadata: { email } });
 
+      if (clientType === "web") {
+        const policy = TOKEN_POLICY[clientType] ?? TOKEN_POLICY.web;
+        setCookie(c, "refresh_token", tokens.refreshToken, {
+          httpOnly: true,
+          secure: true,
+          sameSite: "Lax",
+          path: "/auth",
+          maxAge: policy.refreshToken.expiresInSeconds,
+        });
+      }
+
       return c.json(
         {
           data: {
             message: "Login berhasil",
             accessToken: tokens.accessToken,
-            refreshToken: tokens.refreshToken,
+            ...(clientType !== "web" ? { refreshToken: tokens.refreshToken } : {}),
             expiresIn: tokens.expiresIn,
             tokenType: "Bearer",
           },
@@ -310,8 +335,15 @@ export function createAuthRoutes<
       );
     } catch (err: any) {
       if (err.status === 401 || err.code === "INVALID_CREDENTIALS") {
-        await cacheService.incrementRateLimit(ip);
+        const result = await cacheService.incrementRateLimit(ip);
         audit.log({ event: "login_failed", ip, metadata: { email } });
+        return c.json({
+          error: {
+             code: err.code || "INVALID_CREDENTIALS",
+             message: err.message,
+             remainingAttempts: Math.max(0, RATE_LIMIT_MAX - result.count)
+          }
+        }, err.status || 401);
       }
       return errorResponse(c, err);
     }
@@ -350,39 +382,55 @@ export function createAuthRoutes<
   });
 
   authRoutes.openapi(refreshRoute, async (c: any) => {
-    const { refreshToken } = c.req.valid("json");
+    let { refreshToken } = c.req.valid("json");
+    let fromCookie = false;
+    if (!refreshToken) {
+      refreshToken = getCookie(c, "refresh_token");
+      if (refreshToken) fromCookie = true;
+    }
+    if (!refreshToken) {
+      return c.json(
+        { error: { code: "VALIDATION_ERROR", message: "Refresh token wajib diisi" } },
+        400
+      );
+    }
     const { authService, cacheService, audit } = makeServices(c, dialect);
     const ip = getIp(c);
 
     const rateLimitKey = `refresh:${ip}`;
-    const attempts = await cacheService.getRateLimit(rateLimitKey);
-    if (attempts >= RATE_LIMIT_MAX) {
-      audit.log({
-        event: "rate_limit_hit",
-        ip,
-        metadata: { endpoint: "refresh" },
-      });
-      return c.json(
-        {
-          error: {
-            code: "RATE_LIMITED",
-            message: "Terlalu banyak percobaan. Coba lagi dalam 5 menit.",
-          },
-        },
-        429,
-      );
+    const rl = await cacheService.getRateLimit(rateLimitKey);
+    const limitRes = handleRateLimit(c, rl, RATE_LIMIT_MAX, "Terlalu banyak percobaan. Coba lagi dalam beberapa saat.");
+    if (limitRes) {
+      audit.log({ event: "rate_limit_hit", ip, metadata: { endpoint: "refresh" } });
+      return limitRes;
     }
 
     try {
       const tokens = await authService.rotateRefreshToken(refreshToken);
       audit.log({ event: "token_refresh", ip });
 
+      let returnRefreshToken = tokens.refreshToken;
+
+      // Jika dari awal dikirim via cookie, asumsikan web client dan set via cookie
+      if (fromCookie) {
+        setCookie(c, "refresh_token", tokens.refreshToken, {
+          httpOnly: true,
+          secure: true,
+          sameSite: "Lax",
+          path: "/auth",
+          // maxAge kira-kira sama dengan expiresIn default (misal 30 hari untuk refresh), tapi kita bisa ambil manual
+          // atau set saja session-cookie jika kita tidak tahu (di sini default 30 days fallback)
+          maxAge: 30 * 24 * 60 * 60,
+        });
+        returnRefreshToken = undefined;
+      }
+
       return c.json(
         {
           data: {
             message: "Token berhasil diperbarui",
             accessToken: tokens.accessToken,
-            refreshToken: tokens.refreshToken,
+            ...(returnRefreshToken ? { refreshToken: returnRefreshToken } : {}),
             expiresIn: tokens.expiresIn,
             tokenType: "Bearer",
           },
@@ -424,7 +472,10 @@ export function createAuthRoutes<
   });
 
   authRoutes.openapi(logoutRoute, async (c: any) => {
-    const { refreshToken } = c.req.valid("json");
+    let { refreshToken } = c.req.valid("json");
+    if (!refreshToken) {
+      refreshToken = getCookie(c, "refresh_token");
+    }
     const { authService, audit } = makeServices(c, dialect);
 
     const exp = c.var.exp ?? Math.floor(Date.now() / 1000) + 900;
@@ -435,6 +486,8 @@ export function createAuthRoutes<
       clientType: c.var.clientType,
       ip: getIp(c),
     });
+    
+    deleteCookie(c, "refresh_token", { path: "/auth" });
 
     return c.json({ data: { message: "Logout berhasil" } }, 200);
   });
@@ -460,6 +513,8 @@ export function createAuthRoutes<
 
     await authService.logoutAll(c.var.userId);
     audit.log({ event: "logout_all", userId: c.var.userId, ip: getIp(c) });
+    
+    deleteCookie(c, "refresh_token", { path: "/auth" });
 
     return c.json({ data: { message: "Semua sesi berhasil dicabut" } }, 200);
   });
@@ -473,11 +528,7 @@ export function createAuthRoutes<
     description: "Menampilkan daftar semua sesi perangkat (refresh token) yang aktif saat ini",
     security: [{ Bearer: [] }],
     request: {
-      query: z.object({
-        currentFamilyId: z.string().optional().openapi({
-          description: "ID keluarga token untuk identifikasi sesi saat ini (internal)",
-        }),
-      }),
+      query: z.object({}),
     },
     responses: {
       200: {
@@ -508,9 +559,8 @@ export function createAuthRoutes<
   });
 
   authRoutes.openapi(getSessionsRoute, async (c: any) => {
-    const { currentFamilyId } = c.req.valid("query");
     const { authService } = makeServices(c, dialect);
-    const sessions = await authService.getSessions(c.var.userId, currentFamilyId);
+    const sessions = await authService.getSessions(c.var.userId);
 
     const formatted = sessions.map((s: any) => ({
       ...s,
@@ -664,18 +714,9 @@ export function createAuthRoutes<
     const verificationMethod = c.var.emailConfig?.verificationMethod ?? "link";
 
     const rateLimitKey = `resend-verify:${email}`;
-    const attempts = await cacheService.getRateLimit(rateLimitKey);
-    if (attempts >= 3) {
-      return c.json(
-        {
-          error: {
-            code: "RATE_LIMITED",
-            message: "Terlalu banyak permintaan. Coba lagi dalam beberapa menit.",
-          },
-        },
-        429,
-      );
-    }
+    const rl = await cacheService.getRateLimit(rateLimitKey);
+    const limitRes = handleRateLimit(c, rl, 3, "Terlalu banyak permintaan. Coba lagi dalam beberapa saat.");
+    if (limitRes) return limitRes;
 
     try {
       const ttl = c.var.emailConfig?.verificationCodeTtlMinutes;
@@ -784,22 +825,11 @@ export function createAuthRoutes<
     const ip = getIp(c);
 
     const rateLimitKey = `verify-otp:${email}`;
-    const attempts = await cacheService.getRateLimit(rateLimitKey);
-    if (attempts >= OTP_VERIFY_RATE_LIMIT_MAX) {
-      audit.log({
-        event: "rate_limit_hit",
-        ip,
-        metadata: { email, endpoint: "verify-email-code" },
-      });
-      return c.json(
-        {
-          error: {
-            code: "RATE_LIMITED",
-            message: "Terlalu banyak percobaan verifikasi kode. Coba lagi dalam 5 menit.",
-          },
-        },
-        429,
-      );
+    const rl = await cacheService.getRateLimit(rateLimitKey);
+    const limitRes = handleRateLimit(c, rl, OTP_VERIFY_RATE_LIMIT_MAX, "Terlalu banyak percobaan verifikasi kode. Coba lagi dalam beberapa saat.");
+    if (limitRes) {
+      audit.log({ event: "rate_limit_hit", ip, metadata: { email, endpoint: "verify-email-code" } });
+      return limitRes;
     }
 
     try {
@@ -1163,22 +1193,11 @@ export function createAuthRoutes<
     const ua = c.req.header("User-Agent") ?? "";
 
     const rateLimitKey = `google-token:${ip}`;
-    const attempts = await cacheService.getRateLimit(rateLimitKey);
-    if (attempts >= RATE_LIMIT_MAX) {
-      audit.log({
-        event: "rate_limit_hit",
-        ip,
-        metadata: { endpoint: "google/token" },
-      });
-      return c.json(
-        {
-          error: {
-            code: "RATE_LIMITED",
-            message: "Terlalu banyak percobaan. Coba lagi dalam 5 menit.",
-          },
-        },
-        429,
-      );
+    const rl = await cacheService.getRateLimit(rateLimitKey);
+    const limitRes = handleRateLimit(c, rl, RATE_LIMIT_MAX, "Terlalu banyak percobaan. Coba lagi dalam beberapa saat.");
+    if (limitRes) {
+      audit.log({ event: "rate_limit_hit", ip, metadata: { endpoint: "google-token" } });
+      return limitRes;
     }
 
     try {
@@ -1266,18 +1285,9 @@ export function createAuthRoutes<
     const ip = getIp(c);
 
     const rateLimitKey = `forgot-password:${email}`;
-    const attempts = await cacheService.getRateLimit(rateLimitKey);
-    if (attempts >= FORGOT_PASSWORD_RATE_LIMIT_MAX) {
-      return c.json(
-        {
-          error: {
-            code: "RATE_LIMITED",
-            message: "Terlalu banyak permintaan reset password. Coba lagi dalam 5 menit.",
-          },
-        },
-        429,
-      );
-    }
+    const rl = await cacheService.getRateLimit(rateLimitKey);
+    const limitRes = handleRateLimit(c, rl, FORGOT_PASSWORD_RATE_LIMIT_MAX, "Terlalu banyak permintaan. Coba lagi dalam beberapa saat.");
+    if (limitRes) return limitRes;
 
     await cacheService.incrementRateLimit(rateLimitKey, FORGOT_PASSWORD_RATE_LIMIT_WINDOW);
     const userId = await passwordResetService.findUserByEmail(email);
@@ -1349,22 +1359,11 @@ export function createAuthRoutes<
     const ip = getIp(c);
 
     const rateLimitKey = `reset-password:${ip}`;
-    const attempts = await cacheService.getRateLimit(rateLimitKey);
-    if (attempts >= 10) {
-      audit.log({
-        event: "rate_limit_hit",
-        ip,
-        metadata: { endpoint: "reset-password" },
-      });
-      return c.json(
-        {
-          error: {
-            code: "RATE_LIMITED",
-            message: "Terlalu banyak percobaan reset password. Coba lagi dalam 5 menit.",
-          },
-        },
-        429,
-      );
+    const rl = await cacheService.getRateLimit(rateLimitKey);
+    const limitRes = handleRateLimit(c, rl, 10, "Terlalu banyak percobaan. Coba lagi dalam beberapa saat.");
+    if (limitRes) {
+      audit.log({ event: "rate_limit_hit", ip, metadata: { endpoint: "reset-password" } });
+      return limitRes;
     }
 
     try {

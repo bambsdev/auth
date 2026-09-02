@@ -132,6 +132,24 @@ export class AuthService {
       this.jwtRefresh,
     );
 
+    // Limit active sessions (max 10)
+    const activeSessions = await conn.query.refreshTokens.findMany({
+      where: and(
+        eq(refreshTokensTable.userId, userId),
+        eq(refreshTokensTable.isRevoked, false)
+      ),
+      orderBy: (rt: any, { asc }: any) => [asc(rt.createdAt)],
+    });
+
+    if (activeSessions.length >= 10) {
+      const sessionsToDelete = activeSessions.slice(0, activeSessions.length - 9);
+      for (const session of sessionsToDelete) {
+        await conn.update(refreshTokensTable)
+          .set({ isRevoked: true })
+          .where(eq(refreshTokensTable.id, session.id));
+      }
+    }
+
     // Simpan hash refresh token ke database
     await conn.insert(refreshTokensTable).values({
       userId,

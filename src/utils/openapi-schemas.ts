@@ -13,7 +13,7 @@ export const TokenResponseSchema = z.object({
   data: z.object({
     message: z.string().openapi({ example: "Login berhasil" }),
     accessToken: z.string().openapi({ example: "eyJhbGciOiJIUzI1NiIsInR..." }),
-    refreshToken: z.string().openapi({ example: "eyJhbGciOiJIUzI1NiIsInR..." }),
+    refreshToken: z.string().optional().openapi({ example: "eyJhbGciOiJIUzI1NiIsInR..." }),
     expiresIn: z.number().openapi({ example: 86400 }),
     tokenType: z.string().openapi({ example: "Bearer" }),
   })
