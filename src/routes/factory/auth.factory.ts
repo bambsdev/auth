@@ -46,6 +46,69 @@ import {
   getIp,
   errorResponse,
 } from "./shared";
+import { generateCodeVerifier, generateCodeChallenge } from "../../utils/pkce";
+
+/**
+ * Mendapatkan konfigurasi cookie refresh_token yang adaptif.
+ * - Production: Domain=.rakkita.id, SameSite=Lax (First-party root cookie across all subdomains)
+ * - Development/Staging/Localhost: SameSite=None, Secure=true, no domain (Cross-site compatible)
+ */
+export function getAuthCookieOptions(
+  c: any,
+  maxAge?: number,
+): {
+  httpOnly: boolean;
+  secure: boolean;
+  sameSite: "Lax" | "None";
+  path: string;
+  domain?: string;
+  maxAge?: number;
+} {
+  const host = typeof c.req?.header === "function" ? (c.req.header("host") || "") : "";
+  const isProd =
+    c.env?.IS_PRODUCTION === "true" ||
+    c.env?.NODE_ENV === "production" ||
+    (Boolean(host) &&
+      !host.includes("dev") &&
+      !host.includes("staging") &&
+      !host.includes("localhost") &&
+      !host.includes("127.0.0.1") &&
+      host.endsWith("rakkita.id"));
+
+  const cookieDomain = c.env?.COOKIE_DOMAIN || (isProd ? ".rakkita.id" : undefined);
+
+  if (isProd && cookieDomain) {
+    return {
+      httpOnly: true,
+      secure: true,
+      sameSite: "Lax",
+      path: "/",
+      domain: cookieDomain,
+      ...(maxAge !== undefined ? { maxAge } : {}),
+    };
+  }
+
+  return {
+    httpOnly: true,
+    secure: true,
+    sameSite: "None",
+    path: "/",
+    ...(maxAge !== undefined ? { maxAge } : {}),
+  };
+}
+
+/**
+ * Menghapus cookie autentikasi secara bersih di semua kemungkinan scope (domain dan host-only).
+ */
+export function clearAuthCookies(c: any) {
+  const opts = getAuthCookieOptions(c);
+  if (opts.domain) {
+    deleteCookie(c, "refresh_token", { path: "/", domain: opts.domain });
+    deleteCookie(c, "refresh_token", { path: "/auth", domain: opts.domain });
+  }
+  deleteCookie(c, "refresh_token", { path: "/" });
+  deleteCookie(c, "refresh_token", { path: "/auth" });
+}
 
 
 function handleRateLimit(c: any, rl: { count: number, resetAt: number }, max: number, msg: string) {
@@ -312,13 +375,8 @@ export function createAuthRoutes<
 
       if (clientType === "web") {
         const policy = TOKEN_POLICY[clientType] ?? TOKEN_POLICY.web;
-        setCookie(c, "refresh_token", tokens.refreshToken, {
-          httpOnly: true,
-          secure: true,
-          sameSite: "None",
-          path: "/",
-          maxAge: policy.refreshToken.expiresInSeconds,
-        });
+        const cookieOpts = getAuthCookieOptions(c, policy.refreshToken.expiresInSeconds);
+        setCookie(c, "refresh_token", tokens.refreshToken, cookieOpts);
       }
 
       return c.json(
@@ -413,15 +471,8 @@ export function createAuthRoutes<
 
       // Jika dari awal dikirim via cookie, asumsikan web client dan set via cookie
       if (fromCookie) {
-        setCookie(c, "refresh_token", tokens.refreshToken, {
-          httpOnly: true,
-          secure: true,
-          sameSite: "None",
-          path: "/",
-          // maxAge kira-kira sama dengan expiresIn default (misal 30 hari untuk refresh), tapi kita bisa ambil manual
-          // atau set saja session-cookie jika kita tidak tahu (di sini default 30 days fallback)
-          maxAge: 30 * 24 * 60 * 60,
-        });
+        const cookieOpts = getAuthCookieOptions(c, 30 * 24 * 60 * 60);
+        setCookie(c, "refresh_token", tokens.refreshToken, cookieOpts);
         returnRefreshToken = undefined;
       }
 
@@ -487,8 +538,7 @@ export function createAuthRoutes<
       ip: getIp(c),
     });
     
-    deleteCookie(c, "refresh_token", { path: "/" });
-    deleteCookie(c, "refresh_token", { path: "/auth" });
+    clearAuthCookies(c);
 
     return c.json({ data: { message: "Logout berhasil" } }, 200);
   });
@@ -515,8 +565,7 @@ export function createAuthRoutes<
     await authService.logoutAll(c.var.userId);
     audit.log({ event: "logout_all", userId: c.var.userId, ip: getIp(c) });
     
-    deleteCookie(c, "refresh_token", { path: "/" });
-    deleteCookie(c, "refresh_token", { path: "/auth" });
+    clearAuthCookies(c);
 
     return c.json({ data: { message: "Semua sesi berhasil dicabut" } }, 200);
   });
@@ -918,9 +967,15 @@ export function createAuthRoutes<
 
     const { googleService, cacheService } = makeServices(c, dialect);
     const state = querySchema.state || crypto.randomUUID();
+
+    // PKCE (RFC 7636): Generate code_verifier dan code_challenge (S256)
+    const codeVerifier = generateCodeVerifier(64);
+    const codeChallenge = await generateCodeChallenge(codeVerifier);
+
     const statePayload = JSON.stringify({
       clientType,
       redirectUrl,
+      codeVerifier,
       ts: Date.now(),
     });
     await cacheService.setOAuthState(state, statePayload);
@@ -941,6 +996,8 @@ export function createAuthRoutes<
     const authorizationUrl = googleService.getAuthorizationUrl(
       state,
       redirectUri,
+      codeChallenge,
+      "S256",
     );
 
     return c.redirect(authorizationUrl, 302);
@@ -1075,6 +1132,7 @@ export function createAuthRoutes<
     const parsed = JSON.parse(stateData) as {
       clientType: string;
       redirectUrl?: string;
+      codeVerifier?: string;
       ts: number;
     };
 
@@ -1094,7 +1152,11 @@ export function createAuthRoutes<
     try {
       const url = new URL(c.req.url);
       const redirectUri = `${url.origin}/auth/google/callback`;
-      const tokenResponse = await googleService.exchangeCode(code, redirectUri);
+      const tokenResponse = await googleService.exchangeCode(
+        code,
+        redirectUri,
+        parsed.codeVerifier,
+      );
       const googleUser = await googleService.getUserInfo(tokenResponse.access_token);
       const result = await googleService.handleGoogleLogin(
         googleUser,
@@ -1114,13 +1176,8 @@ export function createAuthRoutes<
 
       if (clientType === "web") {
         const policy = TOKEN_POLICY[clientType] ?? TOKEN_POLICY.web;
-        setCookie(c, "refresh_token", result.refreshToken, {
-          httpOnly: true,
-          secure: true,
-          sameSite: "None",
-          path: "/",
-          maxAge: policy.refreshToken.expiresInSeconds,
-        });
+        const cookieOpts = getAuthCookieOptions(c, policy.refreshToken.expiresInSeconds);
+        setCookie(c, "refresh_token", result.refreshToken, cookieOpts);
       }
 
       const validRedirect = isAllowedRedirectUrl(parsed.redirectUrl, c.env) ? parsed.redirectUrl : undefined;

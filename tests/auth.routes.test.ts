@@ -742,6 +742,31 @@ describe("Hono Auth Routes Integration Tests (TDD)", () => {
     }
   });
 
+  test("GET /auth/google/login should initiate PKCE with S256 code_challenge and store codeVerifier in state", async () => {
+    const app = createTestApp();
+    const state = "my-custom-pkce-state-456";
+    const res = await app.request(
+      `/auth/google/login?clientType=web&redirectUrl=${encodeURIComponent("https://auth.example.com/dashboard")}&state=${state}`
+    );
+
+    expect(res.status).toBe(302);
+    const location = res.headers.get("Location");
+    expect(location).toBeDefined();
+
+    const googleUrl = new URL(location!);
+    expect(googleUrl.hostname).toBe("accounts.google.com");
+    expect(googleUrl.searchParams.get("code_challenge")).toBeDefined();
+    expect(googleUrl.searchParams.get("code_challenge_method")).toBe("S256");
+    expect(googleUrl.searchParams.get("state")).toBe(state);
+
+    // Verify codeVerifier is saved in state KV
+    const savedState = await mockKv.get(`oauth-state:${state}`);
+    expect(savedState).toBeDefined();
+    const parsed = JSON.parse(savedState!);
+    expect(parsed.codeVerifier).toBeDefined();
+    expect(parsed.codeVerifier.length).toBeGreaterThanOrEqual(43);
+  });
+
   test("POST /auth/resend-verification should not increment rate limit for nonexistent user", async () => {
     const app = createTestApp();
     const email = "nonexistent-user@example.com";

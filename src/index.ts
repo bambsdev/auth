@@ -7,6 +7,7 @@
 export { ImageFilterService } from "./utils/image-filter";
 export type { ImageFilterConfig, IImageFilterService } from "./utils/image-filter";
 export * from "./utils/validation";
+export { generateCodeVerifier, generateCodeChallenge, base64UrlEncode } from "./utils/pkce";
 export { R2UploadService, extractR2KeyFromUrl } from "./services/r2-upload.service";
 export { CacheService } from "./services/cache.service";
 export { AuditService } from "./services/audit.service";

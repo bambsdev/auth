@@ -63,7 +63,12 @@ export class GoogleOAuthService {
 
   // ── Web Flow: Generate Authorization URL ─────────────────────────────────
 
-  getAuthorizationUrl(state: string, redirectUri: string): string {
+  getAuthorizationUrl(
+    state: string,
+    redirectUri: string,
+    codeChallenge?: string,
+    codeChallengeMethod: string = "S256",
+  ): string {
     const params = new URLSearchParams({
       client_id: this.clientId,
       redirect_uri: redirectUri,
@@ -74,6 +79,11 @@ export class GoogleOAuthService {
       prompt: "consent",
     });
 
+    if (codeChallenge) {
+      params.set("code_challenge", codeChallenge);
+      params.set("code_challenge_method", codeChallengeMethod);
+    }
+
     return `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
   }
 
@@ -82,17 +92,24 @@ export class GoogleOAuthService {
   async exchangeCode(
     code: string,
     redirectUri: string,
+    codeVerifier?: string,
   ): Promise<GoogleTokenResponse> {
+    const bodyParams = new URLSearchParams({
+      code,
+      client_id: this.clientId,
+      client_secret: this.clientSecret,
+      redirect_uri: redirectUri,
+      grant_type: "authorization_code",
+    });
+
+    if (codeVerifier) {
+      bodyParams.set("code_verifier", codeVerifier);
+    }
+
     const response = await fetch("https://oauth2.googleapis.com/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({
-        code,
-        client_id: this.clientId,
-        client_secret: this.clientSecret,
-        redirect_uri: redirectUri,
-        grant_type: "authorization_code",
-      }),
+      body: bodyParams,
     });
 
     if (!response.ok) {
