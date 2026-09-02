@@ -63,7 +63,7 @@ export function isOriginMatching(pattern: string, parsedTarget: URL): boolean {
     return true;
   }
 
-  // Wildcard hostname match (contoh: *.web-rakkita-dev.pages.dev)
+  // Wildcard hostname match (contoh: *.example.pages.dev)
   if (patHost.startsWith("*.")) {
     const rootDomain = patHost.slice(2);
     if (targetHost === rootDomain || targetHost.endsWith(`.${rootDomain}`)) {

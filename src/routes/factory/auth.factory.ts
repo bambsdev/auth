@@ -49,9 +49,13 @@ import {
 import { generateCodeVerifier, generateCodeChallenge } from "../../utils/pkce";
 
 /**
- * Mendapatkan konfigurasi cookie refresh_token yang adaptif.
- * - Production: Domain=.rakkita.id, SameSite=Lax (First-party root cookie across all subdomains)
- * - Development/Staging/Localhost: SameSite=None, Secure=true, no domain (Cross-site compatible)
+ * Mendapatkan konfigurasi cookie refresh_token yang adaptif dan sepenuhnya universal.
+ * - Mengambil konfigurasi dari environment c.env (COOKIE_DOMAIN, COOKIE_SAME_SITE, COOKIE_SECURE).
+ * - Jika COOKIE_DOMAIN dikonfigurasi (misal di production: ".example.com"):
+ *   Menggunakan domain tersebut dengan SameSite="Lax" (atau sesuai COOKIE_SAME_SITE).
+ * - Jika COOKIE_DOMAIN tidak dikonfigurasi (misal di dev / staging / localhost):
+ *   Tanpa atribut domain dan SameSite="None" (atau sesuai COOKIE_SAME_SITE).
+ * Bebas dari hardcode domain proyek tertentu agar paket tetap reusable secara universal.
  */
 export function getAuthCookieOptions(
   c: any,
@@ -59,29 +63,21 @@ export function getAuthCookieOptions(
 ): {
   httpOnly: boolean;
   secure: boolean;
-  sameSite: "Lax" | "None";
+  sameSite: "Lax" | "Strict" | "None";
   path: string;
   domain?: string;
   maxAge?: number;
 } {
-  const host = typeof c.req?.header === "function" ? (c.req.header("host") || "") : "";
-  const isProd =
-    c.env?.IS_PRODUCTION === "true" ||
-    c.env?.NODE_ENV === "production" ||
-    (Boolean(host) &&
-      !host.includes("dev") &&
-      !host.includes("staging") &&
-      !host.includes("localhost") &&
-      !host.includes("127.0.0.1") &&
-      host.endsWith("rakkita.id"));
+  const rawDomain = c.env?.COOKIE_DOMAIN;
+  const cookieDomain = typeof rawDomain === "string" && rawDomain.trim().length > 0 ? rawDomain.trim() : undefined;
+  const configuredSameSite = c.env?.COOKIE_SAME_SITE as "Lax" | "Strict" | "None" | undefined;
+  const secure = c.env?.COOKIE_SECURE === false || c.env?.COOKIE_SECURE === "false" ? false : true;
 
-  const cookieDomain = c.env?.COOKIE_DOMAIN || (isProd ? ".rakkita.id" : undefined);
-
-  if (isProd && cookieDomain) {
+  if (cookieDomain) {
     return {
       httpOnly: true,
-      secure: true,
-      sameSite: "Lax",
+      secure,
+      sameSite: configuredSameSite || "Lax",
       path: "/",
       domain: cookieDomain,
       ...(maxAge !== undefined ? { maxAge } : {}),
@@ -90,8 +86,8 @@ export function getAuthCookieOptions(
 
   return {
     httpOnly: true,
-    secure: true,
-    sameSite: "None",
+    secure,
+    sameSite: configuredSameSite || "None",
     path: "/",
     ...(maxAge !== undefined ? { maxAge } : {}),
   };

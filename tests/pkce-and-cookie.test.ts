@@ -36,16 +36,10 @@ describe("RFC 7636 PKCE Utilities & Google OAuth PKCE", () => {
   });
 });
 
-describe("Adaptive Auth Cookie Options (Production Root Cookie vs Dev)", () => {
-  test("returns SameSite=None and no domain in development / localhost environment", () => {
+describe("Adaptive Auth Cookie Options (Universal & Configurable)", () => {
+  test("returns SameSite=None and no domain when COOKIE_DOMAIN is not set (dev/staging/localhost)", () => {
     const mockContext = {
-      env: { IS_PRODUCTION: "false" },
-      req: {
-        header: (name: string) => {
-          if (name === "host") return "localhost:8787";
-          return undefined;
-        },
-      },
+      env: {},
     };
 
     const opts = getAuthCookieOptions(mockContext, 86400);
@@ -57,31 +51,9 @@ describe("Adaptive Auth Cookie Options (Production Root Cookie vs Dev)", () => {
     expect(opts.maxAge).toBe(86400);
   });
 
-  test("returns SameSite=None and no domain on staging / dev subdomains", () => {
+  test("uses configured COOKIE_DOMAIN with default SameSite=Lax when provided", () => {
     const mockContext = {
-      env: { IS_PRODUCTION: "false" },
-      req: {
-        header: (name: string) => {
-          if (name === "host") return "dev-back.rakkita.id";
-          return undefined;
-        },
-      },
-    };
-
-    const opts = getAuthCookieOptions(mockContext, 86400);
-    expect(opts.sameSite).toBe("None");
-    expect(opts.domain).toBeUndefined();
-  });
-
-  test("returns Domain=.rakkita.id and SameSite=Lax in production environment", () => {
-    const mockContext = {
-      env: { IS_PRODUCTION: "true" },
-      req: {
-        header: (name: string) => {
-          if (name === "host") return "back.rakkita.id";
-          return undefined;
-        },
-      },
+      env: { COOKIE_DOMAIN: ".example.com" },
     };
 
     const opts = getAuthCookieOptions(mockContext, 86400);
@@ -89,42 +61,41 @@ describe("Adaptive Auth Cookie Options (Production Root Cookie vs Dev)", () => {
     expect(opts.secure).toBe(true);
     expect(opts.httpOnly).toBe(true);
     expect(opts.path).toBe("/");
-    expect(opts.domain).toBe(".rakkita.id");
+    expect(opts.domain).toBe(".example.com");
     expect(opts.maxAge).toBe(86400);
   });
 
-  test("respects explicit COOKIE_DOMAIN environment variable", () => {
+  test("respects explicit COOKIE_SAME_SITE and COOKIE_SECURE overrides", () => {
     const mockContext = {
-      env: { IS_PRODUCTION: "true", COOKIE_DOMAIN: ".custom-domain.com" },
-      req: {
-        header: (name: string) => {
-          if (name === "host") return "api.custom-domain.com";
-          return undefined;
-        },
+      env: {
+        COOKIE_DOMAIN: ".custom-domain.com",
+        COOKIE_SAME_SITE: "Strict",
+        COOKIE_SECURE: "false",
       },
     };
 
     const opts = getAuthCookieOptions(mockContext);
-    expect(opts.sameSite).toBe("Lax");
+    expect(opts.sameSite).toBe("Strict");
     expect(opts.domain).toBe(".custom-domain.com");
+    expect(opts.secure).toBe(false);
   });
 
   test("clearAuthCookies executes cookie deletion with domain and path safely", async () => {
     const app = new OpenAPIHono();
     app.post("/test-logout", (c) => {
-      (c as any).env = { IS_PRODUCTION: "true", COOKIE_DOMAIN: ".rakkita.id" };
+      (c as any).env = { COOKIE_DOMAIN: ".example.com" };
       clearAuthCookies(c);
       return c.json({ ok: true });
     });
 
     const res = await app.request("/test-logout", {
       method: "POST",
-      headers: { host: "back.rakkita.id" },
+      headers: { host: "api.example.com" },
     });
     expect(res.status).toBe(200);
     const setCookie = res.headers.get("Set-Cookie");
     expect(setCookie).toBeDefined();
     expect(setCookie).toContain("refresh_token=");
-    expect(setCookie).toContain("Domain=.rakkita.id");
+    expect(setCookie).toContain("Domain=.example.com");
   });
 });

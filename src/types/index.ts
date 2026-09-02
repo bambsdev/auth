@@ -15,6 +15,9 @@ export type SharedAuthBindings = {
   RESEND_API_KEY: string;
   APP_URL: string; // base URL untuk verification link
   EMAIL_FROM?: string; // (Opsional) email pengirim default
+  COOKIE_DOMAIN?: string; // (Opsional) Root cookie domain (contoh: .example.com) untuk first-party cookie sharing
+  COOKIE_SAME_SITE?: "Lax" | "Strict" | "None"; // (Opsional) SameSite policy override
+  COOKIE_SECURE?: string | boolean; // (Opsional) Secure flag override (default true)
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
   GOOGLE_ALLOWED_CLIENT_IDS?: string; // Comma-separated extra client IDs (mobile Android/iOS)
