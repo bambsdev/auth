@@ -53,7 +53,7 @@ function handleRateLimit(c: any, rl: { count: number, resetAt: number }, max: nu
     const retryAfter = Math.max(1, Math.ceil((rl.resetAt - Date.now()) / 1000));
     c.header("Retry-After", String(retryAfter));
     return c.json({
-      error: { code: "RATE_LIMITED", message: msg, retryAfterSeconds: retryAfter }
+      error: { code: "RATE_LIMITED", message: msg, remainingAttempts: 0, retryAfterSeconds: retryAfter }
     }, 429);
   }
   return null;
@@ -832,6 +832,10 @@ export function createAuthRoutes<
       return limitRes;
     }
 
+    // Increment SEBELUM verifikasi untuk mencegah race condition akibat concurrent requests.
+    // Jika sukses, counter akan di-clear. Jika gagal, counter tetap naik.
+    const newRl = await cacheService.incrementRateLimit(rateLimitKey, OTP_VERIFY_RATE_LIMIT_WINDOW);
+
     try {
       const result = await verificationService.verifyEmailCode(email, code);
       await cacheService.clearRateLimit(rateLimitKey);
@@ -852,15 +856,26 @@ export function createAuthRoutes<
         200,
       );
     } catch (err: any) {
-      await cacheService.incrementRateLimit(rateLimitKey, OTP_VERIFY_RATE_LIMIT_WINDOW);
       audit.log({
         event: "verification_failed",
         ip,
         metadata: { reason: err.code, method: "code" },
       });
-      return errorResponse(c, err);
+      const remaining = Math.max(0, OTP_VERIFY_RATE_LIMIT_MAX - newRl.count);
+      const retryAfterSeconds = newRl.count >= OTP_VERIFY_RATE_LIMIT_MAX
+        ? Math.max(1, Math.ceil((newRl.resetAt - Date.now()) / 1000))
+        : undefined;
+      return c.json({
+        error: {
+          code: err.code || "VERIFICATION_FAILED",
+          message: err.message || "Kode verifikasi tidak valid.",
+          remainingAttempts: remaining,
+          ...(retryAfterSeconds !== undefined ? { retryAfterSeconds } : {}),
+        }
+      }, err.status || 400);
     }
   });
+
 
   // ── Google Login ─────────────────────────────────────────────────────────
   const googleLoginRoute = createRoute({
@@ -1287,10 +1302,14 @@ export function createAuthRoutes<
     const rateLimitKey = `forgot-password:${email}`;
     const rl = await cacheService.getRateLimit(rateLimitKey);
     const limitRes = handleRateLimit(c, rl, FORGOT_PASSWORD_RATE_LIMIT_MAX, "Terlalu banyak permintaan. Coba lagi dalam beberapa saat.");
-    if (limitRes) return limitRes;
+    if (limitRes) {
+      audit.log({ event: "rate_limit_hit", ip, metadata: { email, endpoint: "forgot-password" } });
+      return limitRes;
+    }
 
-    await cacheService.incrementRateLimit(rateLimitKey, FORGOT_PASSWORD_RATE_LIMIT_WINDOW);
+    const newRl = await cacheService.incrementRateLimit(rateLimitKey, FORGOT_PASSWORD_RATE_LIMIT_WINDOW);
     const userId = await passwordResetService.findUserByEmail(email);
+
 
     if (userId) {
       try {
@@ -1319,6 +1338,7 @@ export function createAuthRoutes<
       {
         data: {
           message: "Jika email terdaftar, link reset password akan dikirim.",
+          remainingAttempts: Math.max(0, FORGOT_PASSWORD_RATE_LIMIT_MAX - newRl.count),
         },
       },
       200,

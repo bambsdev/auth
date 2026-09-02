@@ -123,20 +123,26 @@ export class CacheService {
     const key = `ratelimit:${ip}`;
     const currentData = await this.getRateLimit(ip);
     const newCount = currentData.count + 1;
-    
-    const resetAt = currentData.resetAt && currentData.resetAt > Date.now() 
-      ? currentData.resetAt 
+
+    // Gunakan resetAt yang sudah ada jika window masih aktif,
+    // agar window tidak bergeser setiap kali increment dipanggil.
+    const resetAt = currentData.resetAt && currentData.resetAt > Date.now()
+      ? currentData.resetAt
       : Date.now() + (windowSeconds * 1000);
 
     const val = JSON.stringify({ count: newCount, resetAt });
 
+    // Gunakan sisa TTL dari window yang sudah berjalan, bukan windowSeconds penuh.
+    // Ini mencegah window "bergeser" setiap kali counter diincrement.
+    const ttlRemaining = Math.max(1, Math.ceil((resetAt - Date.now()) / 1000));
+
     await this.kv.put(key, val, {
-      expirationTtl: windowSeconds,
+      expirationTtl: ttlRemaining,
     });
 
     await this.cache.put(
       this.key(key),
-      this.responseJson(val, Math.min(30, windowSeconds)),
+      this.responseJson(val, Math.min(30, ttlRemaining)),
     );
     return { count: newCount, resetAt };
   }

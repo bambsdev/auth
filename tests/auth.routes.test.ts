@@ -631,6 +631,8 @@ describe("Hono Auth Routes Integration Tests (TDD)", () => {
         body: JSON.stringify({ email, code: "123456" }),
       });
       expect(res.status).toBe(401);
+      const errJson = await res.json();
+      expect(errJson.error.remainingAttempts).toBe(5 - (i + 1));
     }
 
     // 6th attempt should be rate limited (429)
@@ -643,6 +645,7 @@ describe("Hono Auth Routes Integration Tests (TDD)", () => {
     expect(res6.status).toBe(429);
     const json = await res6.json();
     expect(json.error.code).toBe("RATE_LIMITED");
+    expect(json.error.remainingAttempts).toBe(0);
     expect(json.error.retryAfterSeconds).toBeDefined();
     expect(json.error.message).toContain("Coba lagi");
   });
@@ -653,11 +656,13 @@ describe("Hono Auth Routes Integration Tests (TDD)", () => {
 
     // 3 requests to trigger rate limit
     for (let i = 0; i < 3; i++) {
-      await app.request("/auth/forgot-password", {
+      const reqRes = await app.request("/auth/forgot-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email }),
       });
+      const reqJson = await reqRes.json();
+      expect(reqJson.data.remainingAttempts).toBe(3 - (i + 1));
     }
 
     // 4th request should return 429
@@ -670,6 +675,7 @@ describe("Hono Auth Routes Integration Tests (TDD)", () => {
     expect(res.status).toBe(429);
     const json = await res.json();
     expect(json.error.code).toBe("RATE_LIMITED");
+    expect(json.error.remainingAttempts).toBe(0);
     expect(json.error.retryAfterSeconds).toBeDefined();
     expect(json.error.message).toContain("Coba lagi");
   });
