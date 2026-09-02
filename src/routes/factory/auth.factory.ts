@@ -315,8 +315,8 @@ export function createAuthRoutes<
         setCookie(c, "refresh_token", tokens.refreshToken, {
           httpOnly: true,
           secure: true,
-          sameSite: "Lax",
-          path: "/auth",
+          sameSite: "None",
+          path: "/",
           maxAge: policy.refreshToken.expiresInSeconds,
         });
       }
@@ -416,8 +416,8 @@ export function createAuthRoutes<
         setCookie(c, "refresh_token", tokens.refreshToken, {
           httpOnly: true,
           secure: true,
-          sameSite: "Lax",
-          path: "/auth",
+          sameSite: "None",
+          path: "/",
           // maxAge kira-kira sama dengan expiresIn default (misal 30 hari untuk refresh), tapi kita bisa ambil manual
           // atau set saja session-cookie jika kita tidak tahu (di sini default 30 days fallback)
           maxAge: 30 * 24 * 60 * 60,
@@ -487,6 +487,7 @@ export function createAuthRoutes<
       ip: getIp(c),
     });
     
+    deleteCookie(c, "refresh_token", { path: "/" });
     deleteCookie(c, "refresh_token", { path: "/auth" });
 
     return c.json({ data: { message: "Logout berhasil" } }, 200);
@@ -514,6 +515,7 @@ export function createAuthRoutes<
     await authService.logoutAll(c.var.userId);
     audit.log({ event: "logout_all", userId: c.var.userId, ip: getIp(c) });
     
+    deleteCookie(c, "refresh_token", { path: "/" });
     deleteCookie(c, "refresh_token", { path: "/auth" });
 
     return c.json({ data: { message: "Semua sesi berhasil dicabut" } }, 200);
@@ -1115,7 +1117,7 @@ export function createAuthRoutes<
         setCookie(c, "refresh_token", result.refreshToken, {
           httpOnly: true,
           secure: true,
-          sameSite: "Lax",
+          sameSite: "None",
           path: "/",
           maxAge: policy.refreshToken.expiresInSeconds,
         });
@@ -1126,6 +1128,7 @@ export function createAuthRoutes<
         const targetUrl = new URL(validRedirect);
         const fragment = new URLSearchParams({
           accessToken: result.accessToken,
+          refreshToken: result.refreshToken,
           expiresIn: result.expiresIn.toString(),
           isNewUser: result.isNewUser.toString(),
           linked: result.linked.toString(),
