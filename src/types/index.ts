@@ -19,6 +19,7 @@ export type SharedAuthBindings = {
   COOKIE_DOMAIN?: string; // (Opsional) Root cookie domain (contoh: .example.com) untuk first-party cookie sharing
   COOKIE_SAME_SITE?: "Lax" | "Strict" | "None"; // (Opsional) SameSite policy override
   COOKIE_SECURE?: string | boolean; // (Opsional) Secure flag override (default true)
+  REFRESH_TOKEN_GRACE_PERIOD_SECONDS?: number | string; // (Opsional) Grace period rotasi token dalam detik (default: 30)
   GOOGLE_CLIENT_ID: string;
   GOOGLE_CLIENT_SECRET: string;
   GOOGLE_ALLOWED_CLIENT_IDS?: string; // Comma-separated extra client IDs (mobile Android/iOS)

@@ -30,7 +30,7 @@ This package follows a **Clean Service Layer Architecture**. Business logic is s
 ## ✨ Key Features
 
 ### 🛡️ Core Authentication & Session Management
-- **Token Rotation & Reuse Detection**: Refresh token rotation with family-based tracking. If an old token is reused, all tokens in the family are automatically revoked.
+- **Token Rotation & Grace Period (Leeway Window)**: Refresh token rotation with family-based tracking and a 30-second leeway window (RFC 6749 / Auth0 standard) to handle spam reloads and concurrent requests seamlessly. If an old token is reused outside the grace period, all tokens in the family are automatically revoked.
 - **Strict Session Limits (Max 10)**: Prevents session hoarding by automatically revoking the oldest session (FIFO) when a user exceeds 10 active devices/sessions.
 - **Session Control**: List active devices, revoke individual sessions, or execute a global "Logout from all devices" command.
 - **Robust Rate Limiting (CF KV/Cache)**: Strict rate limits built-in to prevent brute-force attacks on login, registration, OTP verification, and password resets, returning standard `retryAfterSeconds` and `remainingAttempts` payloads.
@@ -162,6 +162,7 @@ Example `wrangler.jsonc` configuration:
     "COOKIE_NAME": "my_auth_rf", // Optional, defaults to "refresh_token"
     "COOKIE_DOMAIN": ".myapp.com", // Optional, enables first-party root cookie sharing
     "COOKIE_SAME_SITE": "Lax", // Optional, "Lax" | "Strict" | "None"
+    "REFRESH_TOKEN_GRACE_PERIOD_SECONDS": "30", // Optional, grace period in seconds (default: 30)
     "EMAIL_FROM": "No-Reply <noreply@myapp.com>",
     "BUCKET_PUBLIC_URL": "https://pub-xxx.r2.dev",
     "GOOGLE_CLIENT_ID": "xxx.apps.googleusercontent.com",

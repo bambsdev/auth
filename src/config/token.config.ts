@@ -33,3 +33,8 @@ export const FORGOT_PASSWORD_RATE_LIMIT_WINDOW = 60 * 5; // 5 menit
 // Rate limit OTP code verification
 export const OTP_VERIFY_RATE_LIMIT_MAX = 5;
 export const OTP_VERIFY_RATE_LIMIT_WINDOW = 60 * 5; // 5 menit
+
+// Refresh Token Rotation Grace Period (Leeway Window, RFC 6749 / Auth0 standard)
+// Mencegah false-positive token reuse saat spam reload atau parallel requests (dalam detik)
+export const REFRESH_TOKEN_GRACE_PERIOD_SECONDS = 30;
+

@@ -5,6 +5,17 @@ Semua perubahan penting pada paket `@bambsdev/auth` didokumentasikan dalam berka
 Format berkas ini mengacu pada [Keep a Changelog](https://keepachangelog.com/id/1.0.0/),
 dan proyek ini mematuhi [Semantic Versioning](https://semver.org/lang/id/).
 
+## [1.4.6] - 2026-09-03
+
+### Ditambahkan (Added)
+- **Refresh Token Rotation Grace Period / Leeway Window (Standar IETF RFC 6749 & Auth0)**:
+  - Jendela toleransi waktu rotasi token (default: 30 detik via `REFRESH_TOKEN_GRACE_PERIOD_SECONDS`) untuk mencegah *false-positive reuse attack*.
+  - Penyimpanan token pair hasil rotasi di L1 Cache API + L2 KV (`cacheRotatedTokens` & `getRotatedTokens`) untuk melayani *idempotent replay* secara instan (~1ms).
+  - Mengatasi error `Token reuse terdeteksi, semua sesi dicabut` saat user melakukan reload cepat berulang (*spam reload / F5*) atau saat terdapat request paralel antar-tab.
+  - Jika token lama digunakan kembali setelah melewati batas toleransi grace period (> 30 detik), sistem tetap secara otomatis mendeteksi serangan pencurian token (*Reuse Attack*) dan mencabut seluruh sesi keluarga token (*token family*).
+
+---
+
 ## [1.4.5] - 2026-09-02
 
 ### Ditambahkan (Added)

@@ -427,7 +427,8 @@ describe("AuthService Unit Tests (TDD)", () => {
     });
 
     const db = createMockDb();
-    const service = new AuthService(db, cacheService, JWT_SECRET, JWT_REFRESH_SECRET);
+    // Test reuse detection with gracePeriod = 0 (or expired grace period)
+    const service = new AuthService(db, cacheService, JWT_SECRET, JWT_REFRESH_SECRET, "pg", 0);
 
     const tokens = await service.login("test@example.com", "Password123", "web");
     
@@ -443,6 +444,36 @@ describe("AuthService Unit Tests (TDD)", () => {
     const familyId = dbStore.refreshTokens[0].familyId;
     const activeInFamily = dbStore.refreshTokens.filter(r => r.familyId === familyId && !r.isRevoked);
     expect(activeInFamily.length).toBe(0);
+  });
+
+  test("should tolerate rapid re-rotation within grace period (preventing spam reload logout)", async () => {
+    const hashed = await hashPassword("Password123");
+    dbStore.users.push({
+      id: "user-grace",
+      email: "grace@example.com",
+      password: hashed,
+      isActive: true,
+      isEmailVerified: true,
+    });
+
+    const db = createMockDb();
+    // Default 30s grace period
+    const service = new AuthService(db, cacheService, JWT_SECRET, JWT_REFRESH_SECRET, "pg", 30);
+
+    const tokens = await service.login("grace@example.com", "Password123", "web");
+
+    // First rotation (e.g. reload 1)
+    const rotated1 = await service.rotateRefreshToken(tokens.refreshToken);
+    expect(rotated1.accessToken).toBeDefined();
+
+    // Rapid second rotation using old token (e.g. spam reload 2 within 30s)
+    // Harus sukses dan mengembalikan token yang valid tanpa me-revoke family!
+    const rotated2 = await service.rotateRefreshToken(tokens.refreshToken);
+    expect(rotated2.accessToken).toBeDefined();
+
+    // Family masih aktif dan tidak dicabut
+    const familyTokens = dbStore.refreshTokens.filter(r => r.userId === "user-grace" && !r.isRevoked);
+    expect(familyTokens.length).toBeGreaterThan(0);
   });
 
   // ── Test Logout and Session Management ─────────────────────────────────────

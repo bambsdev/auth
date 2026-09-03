@@ -159,12 +159,16 @@ function makeServices(c: AppContext, dialect: AuthDbDialect) {
     },
     get authService() {
       if (!authService) {
+        const grace = c.env?.REFRESH_TOKEN_GRACE_PERIOD_SECONDS !== undefined
+          ? Number(c.env.REFRESH_TOKEN_GRACE_PERIOD_SECONDS)
+          : undefined;
         authService = new AuthService(
           db,
           this.cacheService,
           c.env.JWT_SECRET,
           c.env.JWT_REFRESH_SECRET,
           dialect,
+          grace,
         );
       }
       return authService;

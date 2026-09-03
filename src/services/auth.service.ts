@@ -6,7 +6,7 @@ import { verifyPassword } from "../utils/password";
 import { hashToken } from "../utils/hash";
 import { resolveUniqueUsername } from "../utils/username";
 import { fail } from "../utils/error";
-import { TOKEN_POLICY } from "../config/token.config";
+import { TOKEN_POLICY, REFRESH_TOKEN_GRACE_PERIOD_SECONDS } from "../config/token.config";
 import type { AnyAuthDB } from "../types/index";
 import { AuthDbAdapter, createAuthDbAdapter, type AuthDbDialect } from "../db/adapter";
 import type { CacheService } from "./cache.service";
@@ -20,6 +20,7 @@ const uuid = () => crypto.randomUUID();
 
 export class AuthService {
   readonly adapter: AuthDbAdapter;
+  readonly gracePeriodSeconds: number;
 
   constructor(
     dbOrAdapter: AnyAuthDB | AuthDbAdapter,
@@ -27,7 +28,13 @@ export class AuthService {
     private readonly jwtSecret: string,
     private readonly jwtRefresh: string,
     dialect: AuthDbDialect = "pg",
+    gracePeriodSeconds: number = REFRESH_TOKEN_GRACE_PERIOD_SECONDS,
   ) {
+    this.gracePeriodSeconds =
+      typeof gracePeriodSeconds === "number" && !isNaN(gracePeriodSeconds)
+        ? gracePeriodSeconds
+        : REFRESH_TOKEN_GRACE_PERIOD_SECONDS;
+
     if ("dialect" in dbOrAdapter && "tables" in dbOrAdapter) {
       this.adapter = dbOrAdapter;
     } else {
@@ -215,6 +222,15 @@ export class AuthService {
       fail("Tipe token salah", "INVALID_TOKEN_TYPE");
 
     const hash = await hashToken(rawRefreshToken);
+
+    // 1. Cek idempotent cache jika gracePeriodSeconds > 0 (menangani spam reload / network race condition)
+    if (this.gracePeriodSeconds > 0) {
+      const cached = await this.cacheService.getRotatedTokens(hash);
+      if (cached) {
+        return cached;
+      }
+    }
+
     const refreshTokensTable = this.adapter.tables.refreshTokens;
 
     const result = await this.db.transaction(async (tx: any) => {
@@ -247,7 +263,27 @@ export class AuthService {
       }
 
       if (existing.isRevoked) {
-        // Token sudah di-revoke sebelumnya → REUSE ATTACK
+        // Cek apakah token di-revoke dalam window Grace Period (RFC 6749 / Auth0 Leeway standard)
+        const lastUsed =
+          existing.lastUsedAt instanceof Date
+            ? existing.lastUsedAt
+            : new Date(existing.lastUsedAt);
+        const elapsedMs = Date.now() - lastUsed.getTime();
+
+        if (this.gracePeriodSeconds > 0 && elapsedMs <= this.gracePeriodSeconds * 1000) {
+          // Masih dalam batas toleransi grace period (spam reload / parallel requests)
+          // Terbitkan token pair baru untuk sesi ini tanpa mencabut family
+          const tokens = await this.generateTokenPair(
+            existing.userId,
+            existing.clientType as ClientType,
+            existing.familyId,
+            undefined,
+            tx,
+          );
+          return { tokens };
+        }
+
+        // Token sudah di-revoke dan di luar batas grace period → REUSE ATTACK NYATA!
         await tx
           .update(refreshTokensTable)
           .set({ isRevoked: true })
@@ -284,6 +320,11 @@ export class AuthService {
     if ("notFound" in result) fail("Token tidak ditemukan", "TOKEN_NOT_FOUND");
     if ("expired" in result)
       fail("Refresh token sudah expired", "TOKEN_EXPIRED");
+
+    // Simpan ke cache selama gracePeriodSeconds untuk idempotent replay request berikutnya
+    if (this.gracePeriodSeconds > 0 && result.tokens) {
+      await this.cacheService.cacheRotatedTokens(hash, result.tokens, this.gracePeriodSeconds);
+    }
 
     return result.tokens;
   }
