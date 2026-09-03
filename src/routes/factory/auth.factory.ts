@@ -1258,14 +1258,17 @@ export function createAuthRoutes<
       const validRedirect = isAllowedRedirectUrl(parsed.redirectUrl, c.env) ? parsed.redirectUrl : undefined;
       if (validRedirect) {
         const targetUrl = new URL(validRedirect);
-        const fragment = new URLSearchParams({
+        const fragmentParams: Record<string, string> = {
           accessToken: result.accessToken,
-          refreshToken: result.refreshToken,
           expiresIn: result.expiresIn.toString(),
           isNewUser: result.isNewUser.toString(),
           linked: result.linked.toString(),
           state: state,
-        });
+        };
+        if (clientType !== "web") {
+          fragmentParams.refreshToken = result.refreshToken;
+        }
+        const fragment = new URLSearchParams(fragmentParams);
         targetUrl.hash = fragment.toString();
 
         return c.redirect(targetUrl.toString(), 302);
@@ -1276,7 +1279,7 @@ export function createAuthRoutes<
           data: {
             message: "Login via Google berhasil",
             accessToken: result.accessToken,
-            refreshToken: result.refreshToken,
+            ...(clientType !== "web" ? { refreshToken: result.refreshToken } : {}),
             expiresIn: result.expiresIn,
             tokenType: "Bearer",
             isNewUser: result.isNewUser,

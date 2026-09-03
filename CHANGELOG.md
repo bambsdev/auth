@@ -5,6 +5,15 @@ Semua perubahan penting pada paket `@bambsdev/auth` didokumentasikan dalam berka
 Format berkas ini mengacu pada [Keep a Changelog](https://keepachangelog.com/id/1.0.0/),
 dan proyek ini mematuhi [Semantic Versioning](https://semver.org/lang/id/).
 
+## [1.4.8] - 2026-09-03
+
+### Keamanan (Security)
+- **Zero-Storage Refresh Token pada Web Client (Pure HttpOnly Cookie Enforcement)**:
+  - Mencegah kebocoran `refreshToken` ke JavaScript dan URL fragment pada callback Google OAuth untuk `clientType === "web"`.
+  - Refresh token untuk web client sekarang secara eksklusif dikelola via cookie `HttpOnly; Secure; SameSite`, memastikan token sepenuhnya kebal dari pencurian via serangan XSS (*Cross-Site Scripting*).
+
+---
+
 ## [1.4.7] - 2026-09-03
 
 ### Dioptimasi (Optimized)
