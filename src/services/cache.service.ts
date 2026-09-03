@@ -18,6 +18,7 @@ import { KVNamespace } from "@cloudflare/workers-types";
 import {
   NEGATIVE_CACHE_TTL_SECONDS,
   RATE_LIMIT_WINDOW,
+  RATE_LIMIT_MAX,
 } from "../config/token.config";
 
 // URL palsu sebagai namespace Cache API key
@@ -88,15 +89,20 @@ export class CacheService {
   async getRateLimit(ip: string): Promise<{ count: number; resetAt: number }> {
     const key = `ratelimit:${ip}`;
 
+    // L1: Cache API (gratis & instan)
     const cached = await this.cache.match(this.key(key));
     if (cached) {
       try {
-        return await cached.json();
+        const parsed = (await cached.json()) as { count: number; resetAt: number };
+        if (parsed?.resetAt && parsed.resetAt > Date.now()) {
+          return parsed;
+        }
       } catch {
         // fallback jika cache lama bukan json
       }
     }
 
+    // L2: KV global
     const kvVal = await this.kv.get(key);
     let count = 0;
     let resetAt = 0;
@@ -112,13 +118,16 @@ export class CacheService {
       }
     }
 
-    await this.cache.put(this.key(key), this.responseJson(JSON.stringify({ count, resetAt }), 30));
+    if (count > 0 && resetAt > Date.now()) {
+      await this.cache.put(this.key(key), this.responseJson(JSON.stringify({ count, resetAt }), 30));
+    }
     return { count, resetAt };
   }
 
   async incrementRateLimit(
     ip: string,
     windowSeconds: number = RATE_LIMIT_WINDOW,
+    thresholdToWriteKv: number = RATE_LIMIT_MAX,
   ): Promise<{ count: number; resetAt: number }> {
     const key = `ratelimit:${ip}`;
     const currentData = await this.getRateLimit(ip);
@@ -133,13 +142,18 @@ export class CacheService {
     const val = JSON.stringify({ count: newCount, resetAt });
 
     // Gunakan sisa TTL dari window yang sudah berjalan, bukan windowSeconds penuh.
-    // Ini mencegah window "bergeser" setiap kali counter diincrement.
     const ttlRemaining = Math.max(1, Math.ceil((resetAt - Date.now()) / 1000));
 
-    await this.kv.put(key, val, {
-      expirationTtl: ttlRemaining,
-    });
+    // Optimasi Hemat KV:
+    // Tulis ke KV HANYA JIKA hitungan gagal sudah mencapai/melebihi threshold (misal >= 5 kegagalan)
+    // untuk memblokir IP secara global. Percobaan ke-1 s/d ke-4 cukup disimpan di Cache API (L1, gratis & unlimited)!
+    if (newCount >= thresholdToWriteKv) {
+      await this.kv.put(key, val, {
+        expirationTtl: ttlRemaining,
+      });
+    }
 
+    // Selalu simpan di Cache API (L1) untuk respon instan lokal
     await this.cache.put(
       this.key(key),
       this.responseJson(val, Math.min(30, ttlRemaining)),
@@ -149,16 +163,19 @@ export class CacheService {
 
   async clearRateLimit(ip: string): Promise<void> {
     const key = `ratelimit:${ip}`;
-    await this.kv.delete(key);
     await this.cache.delete(this.key(key));
+    await this.kv.delete(key);
   }
 
   // ── OAuth State (CSRF protection) ─────────────────────────────────────────
-  // State token disimpan di KV dengan TTL 10 menit.
+  // State token disimpan di Cache API (L1) dan KV dengan TTL 10 menit.
   // One-time use: setelah dipakai di callback, langsung dihapus.
 
   async setOAuthState(state: string, payload: string): Promise<void> {
     const key = `oauth-state:${state}`;
+    // L1: Cache API (gratis & instan)
+    await this.cache.put(this.key(key), this.responseJson(payload, 600));
+    // L2: KV fallback
     await this.kv.put(key, payload, {
       expirationTtl: 60 * 10, // 10 menit
     });
@@ -166,11 +183,20 @@ export class CacheService {
 
   async getOAuthState(state: string): Promise<string | null> {
     const key = `oauth-state:${state}`;
+    // L1: Cache API (menghindari KV read jika user kembali ke PoP yang sama)
+    const cached = await this.cache.match(this.key(key));
+    if (cached) {
+      try {
+        return await cached.text();
+      } catch {}
+    }
+    // L2: KV fallback
     return this.kv.get(key);
   }
 
   async deleteOAuthState(state: string): Promise<void> {
     const key = `oauth-state:${state}`;
+    await this.cache.delete(this.key(key));
     await this.kv.delete(key);
   }
 

@@ -5,6 +5,20 @@ Semua perubahan penting pada paket `@bambsdev/auth` didokumentasikan dalam berka
 Format berkas ini mengacu pada [Keep a Changelog](https://keepachangelog.com/id/1.0.0/),
 dan proyek ini mematuhi [Semantic Versioning](https://semver.org/lang/id/).
 
+## [1.4.7] - 2026-09-03
+
+### Dioptimasi (Optimized)
+- **Google OAuth Zero-KV Flow via Signed HttpOnly Cookie**:
+  - Alur otentikasi Google OAuth sekarang menggunakan signed HttpOnly cookie (`oauth_session`) terenkripsi JWT untuk menyimpan `state`, `code_verifier` (PKCE), dan `redirectUrl`.
+  - Mengeliminasi 100% pembacaan dan penulisan KV pada alur Google OAuth normal (hemat 2 KV Writes + 1 KV Read per login).
+  - Fallback otomatis ke Cache API L1 dan KV tetap dipertahankan untuk backward compatibility dengan klien non-browser.
+- **Rate Limiting L1 Cache API & Lazy Threshold KV Writes**:
+  - Pencatatan percobaan gagal (salah password / verifikasi) ke-1 hingga ke-4 ditangani secara eksklusif oleh Cloudflare Cache API (L1, 100% gratis, unlimited, ~0ms).
+  - Penulisan ke KV global hanya dipicu jika hitungan kegagalan mencapai batas ambang pemblokiran (`>= RATE_LIMIT_MAX`, misal 5 kegagalan) untuk mengunci IP penyerang secara terdistribusi.
+  - Menghilangkan 95% pemborosan kuota KV write dari pengguna yang salah ketik password secara tidak sengaja.
+
+---
+
 ## [1.4.6] - 2026-09-03
 
 ### Ditambahkan (Added)

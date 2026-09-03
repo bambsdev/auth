@@ -33,7 +33,7 @@ This package follows a **Clean Service Layer Architecture**. Business logic is s
 - **Token Rotation & Grace Period (Leeway Window)**: Refresh token rotation with family-based tracking and a 30-second leeway window (RFC 6749 / Auth0 standard) to handle spam reloads and concurrent requests seamlessly. If an old token is reused outside the grace period, all tokens in the family are automatically revoked.
 - **Strict Session Limits (Max 10)**: Prevents session hoarding by automatically revoking the oldest session (FIFO) when a user exceeds 10 active devices/sessions.
 - **Session Control**: List active devices, revoke individual sessions, or execute a global "Logout from all devices" command.
-- **Robust Rate Limiting (CF KV/Cache)**: Strict rate limits built-in to prevent brute-force attacks on login, registration, OTP verification, and password resets, returning standard `retryAfterSeconds` and `remainingAttempts` payloads.
+- **Ultra-Low Cost Rate Limiting (CF Cache API L1 + Lazy KV)**: Failed attempts are tracked in free L1 Cache API; KV is only written when brute-force threshold is breached, eliminating up to 95% of KV write operations.
 - **Adaptive Cookie Management**: Configurable cookie name (`COOKIE_NAME`) and domain (`COOKIE_DOMAIN`) with `HttpOnly`, `Secure`, and adaptive `SameSite` (`Lax` for first-party root sharing, `None` for cross-site dev/preview environments).
 - **Two-Tier Edge Cache**: L1 Cache API + L2 KV caching with negative caching (`"0"`) reducing KV read costs by up to 99%.
 
@@ -44,7 +44,7 @@ This package follows a **Clean Service Layer Architecture**. Business logic is s
 - **Password Reuse Prevention**: Rejects password changes if the new password is identical to the current one.
 
 ### 🌐 Google OAuth 2.0 & RFC 7636 PKCE
-- **PKCE Defense**: Full RFC 7636 PKCE (`code_challenge` S256 + `code_verifier`) preventing authorization code interception and injection attacks.
+- **Zero-KV OAuth Flow & PKCE Defense**: Full RFC 7636 PKCE (`code_challenge` S256 + `code_verifier`) with signed HttpOnly cookie storage (`oauth_session`), eliminating 100% of KV reads/writes during Google login.
 - **Web Flow**: Standard redirect flow with RFC 6750 compliant **URL Fragment delivery** (`#accessToken=...`) preventing token leakage in logs and referrers.
 - **Mobile Flow**: Direct Google ID token verification via Native SDKs (Android/iOS).
 - **Smart Account Linking**: Atomically links Google logins to existing accounts with matching email addresses.

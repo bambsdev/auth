@@ -1,6 +1,7 @@
 // src/routes/factory/auth.factory.ts
 import { OpenAPIHono, createRoute, z } from "@hono/zod-openapi";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
+import { sign, verify } from "hono/jwt";
 import type { Context } from "hono";
 import { CacheService } from "../../services/cache.service";
 import { AuthService } from "../../services/auth.service";
@@ -1003,6 +1004,30 @@ export function createAuthRoutes<
     });
     await cacheService.setOAuthState(state, statePayload);
 
+    // Optimasi zero-KV: Simpan state dan PKCE verifier di signed HttpOnly cookie (Lax)
+    if (c.env?.JWT_SECRET) {
+      try {
+        const oauthSessionToken = await sign(
+          {
+            state,
+            clientType,
+            redirectUrl,
+            codeVerifier,
+            exp: Math.floor(Date.now() / 1000) + 600, // 10 menit
+          },
+          c.env.JWT_SECRET,
+          "HS256",
+        );
+        setCookie(c, "oauth_session", oauthSessionToken, {
+          path: "/auth/google",
+          maxAge: 600,
+          secure: true,
+          httpOnly: true,
+          sameSite: "Lax",
+        });
+      } catch {}
+    }
+
     const url = new URL(c.req.url);
     const redirectUri = `${url.origin}/auth/google/callback`;
 
@@ -1140,8 +1165,43 @@ export function createAuthRoutes<
       return handleErrorRedirect("Parameter code dan state wajib ada", state);
     }
 
-    const stateData = await cacheService.getOAuthState(state);
-    if (!stateData) {
+    let parsed: {
+      clientType: string;
+      redirectUrl?: string;
+      codeVerifier?: string;
+      ts?: number;
+    } | null = null;
+
+    // Prioritas 1: Ambil dari signed HttpOnly cookie (Zero KV Read/Write)
+    const oauthCookie = getCookie(c, "oauth_session");
+    if (oauthCookie && c.env?.JWT_SECRET) {
+      deleteCookie(c, "oauth_session", { path: "/auth/google" });
+      try {
+        const payload = (await verify(oauthCookie, c.env.JWT_SECRET, "HS256")) as any;
+        if (payload && payload.state === state) {
+          parsed = {
+            clientType: payload.clientType,
+            redirectUrl: payload.redirectUrl,
+            codeVerifier: payload.codeVerifier,
+            ts: payload.exp ? payload.exp * 1000 - 600000 : Date.now(),
+          };
+        }
+      } catch {}
+    }
+
+    // Prioritas 2: Fallback ke cacheService jika cookie tidak ada (misal test runner / client non-browser)
+    if (!parsed) {
+      const stateData = await cacheService.getOAuthState(state);
+      if (stateData) {
+        try {
+          parsed = JSON.parse(stateData);
+        } catch {}
+      }
+    }
+
+    await cacheService.deleteOAuthState(state);
+
+    if (!parsed) {
       audit.log({
         event: "google_login_failed",
         ip,
@@ -1149,15 +1209,6 @@ export function createAuthRoutes<
       });
       return handleErrorRedirect("State tidak valid atau sudah expired", state);
     }
-
-    await cacheService.deleteOAuthState(state);
-
-    const parsed = JSON.parse(stateData) as {
-      clientType: string;
-      redirectUrl?: string;
-      codeVerifier?: string;
-      ts: number;
-    };
 
     const MAX_STATE_AGE_MS = 10 * 60 * 1000; // 10 menit
     if (parsed.ts && Date.now() - parsed.ts > MAX_STATE_AGE_MS) {
