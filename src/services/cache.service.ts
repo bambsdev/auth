@@ -178,8 +178,10 @@ export class CacheService {
 
   /**
    * Menyimpan token pair baru yang dihasilkan saat rotasi refresh token
-   * selama window grace period (default 30 detik).
+   * selama window grace period (default 30 detik) di Cache API (L1 - Zero Cost).
    * Mencegah false-positive "Token reuse detected" saat spam reload atau parallel requests.
+   * Catatan: Hanya menggunakan Cache API (L1, RAM/SSD edge, gratis & unlimited),
+   * tanpa menulis ke KV untuk menghemat kuota billing KV write.
    */
   async cacheRotatedTokens(
     oldTokenHash: string,
@@ -188,32 +190,23 @@ export class CacheService {
   ): Promise<void> {
     const key = `rotated_rt:${oldTokenHash}`;
     const value = JSON.stringify(tokens);
-    await this.kv.put(key, value, { expirationTtl: Math.max(60, ttlSeconds) });
+    // Simpan HANYA ke Cache API (L1) — 100% bebas biaya KV write
     await this.cache.put(this.key(key), this.responseJson(value, ttlSeconds));
   }
 
   /**
-   * Mengambil token pair hasil rotasi jika masih dalam grace period window.
+   * Mengambil token pair hasil rotasi jika masih dalam grace period window dari Cache API (L1).
    */
   async getRotatedTokens(
     oldTokenHash: string,
   ): Promise<{ accessToken: string; refreshToken: string; expiresIn: number } | null> {
     const key = `rotated_rt:${oldTokenHash}`;
-    // L1: Cache API
+    // L1: Cache API (instan ~1ms, zero KV read)
     const cached = await this.cache.match(this.key(key));
     if (cached) {
       try {
         const text = await cached.text();
         return JSON.parse(text);
-      } catch {}
-    }
-    // L2: KV
-    const kvVal = await this.kv.get(key);
-    if (kvVal) {
-      try {
-        const parsed = JSON.parse(kvVal);
-        await this.cache.put(this.key(key), this.responseJson(kvVal, 30));
-        return parsed;
       } catch {}
     }
     return null;
