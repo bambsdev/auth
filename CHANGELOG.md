@@ -5,6 +5,17 @@ Semua perubahan penting pada paket `@bambsdev/auth` didokumentasikan dalam berka
 Format berkas ini mengacu pada [Keep a Changelog](https://keepachangelog.com/id/1.0.0/),
 dan proyek ini mematuhi [Semantic Versioning](https://semver.org/lang/id/).
 
+## [1.4.9] - 2026-09-04
+
+### Diperbaiki (Fixed)
+- **Validasi Request Body Fleksibel pada Refresh & Logout Token**:
+  - Mengubah `refreshSchema` dan `logoutSchema` menjadi opsional dengan default objek kosong (`.optional().default({})`).
+  - Menetapkan `required: false` pada `request.body` di OpenAPI route `/auth/refresh` dan `/auth/logout`.
+  - Mengeliminasi error validasi `{"error":{"code":"VALIDATION_ERROR","message":"Required"}}` ketika klien Web / Admin melakukan refresh atau logout hanya mengandalkan HttpOnly Cookie (dengan body `{}` atau tanpa body).
+  - Standarisasi respon error saat refresh token tidak ditemukan (baik di body maupun cookie) menjadi `401 UNAUTHORIZED` dengan kode `UNAUTHORIZED` (sebelumnya `400 VALIDATION_ERROR`), sehingga interceptor HTTP client dapat mendeteksi kedaluwarsa sesi secara akurat.
+
+---
+
 ## [1.4.8] - 2026-09-03
 
 ### Keamanan (Security)

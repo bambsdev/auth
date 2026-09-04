@@ -244,8 +244,8 @@ export default {
 | :------- | :-------------------------- | :--------- | :--------- | :----------------------------------------------------- |
 | `POST`   | `/auth/register`            | Public     | -          | Register new user with email, password, and username   |
 | `POST`   | `/auth/login`               | Public     | 5 / 5 min  | Login with email & password, returns JWT token pair    |
-| `POST`   | `/auth/refresh`             | Public     | 5 / 5 min  | Rotate refresh token for a new access token            |
-| `POST`   | `/auth/logout`              | 🔒 Private | -          | Logout current device session (blacklists JWT)         |
+| `POST`   | `/auth/refresh`             | Public     | 5 / 5 min  | Rotate refresh token (supports JSON body or HttpOnly Cookie) |
+| `POST`   | `/auth/logout`              | 🔒 Private | -          | Logout current device session (supports JSON body or Cookie) |
 | `POST`   | `/auth/logout-all`          | 🔒 Private | -          | Revoke all active sessions across all devices          |
 | `GET`    | `/auth/sessions`            | 🔒 Private | -          | List all active sessions with device info              |
 | `DELETE` | `/auth/sessions/:id`        | 🔒 Private | -          | Revoke a specific session ID                           |
