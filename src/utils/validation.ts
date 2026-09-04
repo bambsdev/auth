@@ -50,14 +50,14 @@ export const loginSchema = z.object({
 export const refreshSchema = z.object({
   refreshToken: z.string().min(1, "Refresh token wajib diisi").optional()
     .openapi({ example: "eyJhbG...", description: "JWT Refresh Token" }),
-}).openapi("RefreshRequest");
+}).optional().default({}).openapi("RefreshRequest");
 
 // ── Logout ────────────────────────────────────────────────────────────────────
 
 export const logoutSchema = z.object({
   refreshToken: z.string().min(1).optional()
     .openapi({ example: "eyJhbG...", description: "Refresh Token untuk di-revoke" }),
-}).openapi("LogoutRequest");
+}).optional().default({}).openapi("LogoutRequest");
 
 // ── Verify Email by Link ──────────────────────────────────────────────────────
 

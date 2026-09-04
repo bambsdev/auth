@@ -439,6 +439,7 @@ export function createAuthRoutes<
     request: {
       body: {
         content: { "application/json": { schema: refreshSchema } },
+        required: false,
       },
     },
     responses: {
@@ -462,7 +463,7 @@ export function createAuthRoutes<
   });
 
   authRoutes.openapi(refreshRoute, async (c: any) => {
-    let { refreshToken } = c.req.valid("json");
+    let { refreshToken } = c.req.valid("json") || {};
     let fromCookie = false;
     const cookieName = getAuthCookieName(c);
     if (!refreshToken) {
@@ -471,8 +472,8 @@ export function createAuthRoutes<
     }
     if (!refreshToken) {
       return c.json(
-        { error: { code: "VALIDATION_ERROR", message: "Refresh token wajib diisi" } },
-        400
+        { error: { code: "UNAUTHORIZED", message: "Refresh token wajib diisi" } },
+        401
       );
     }
     const { authService, cacheService, audit } = makeServices(c, dialect);
@@ -531,6 +532,7 @@ export function createAuthRoutes<
     request: {
       body: {
         content: { "application/json": { schema: logoutSchema } },
+        required: false,
       },
     },
     responses: {
@@ -546,7 +548,7 @@ export function createAuthRoutes<
   });
 
   authRoutes.openapi(logoutRoute, async (c: any) => {
-    let { refreshToken } = c.req.valid("json");
+    let { refreshToken } = c.req.valid("json") || {};
     if (!refreshToken) {
       const cookieName = getAuthCookieName(c);
       refreshToken = getCookie(c, cookieName) || (cookieName !== "refresh_token" ? getCookie(c, "refresh_token") : undefined);
