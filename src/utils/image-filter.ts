@@ -11,6 +11,7 @@ export interface ImageFilterConfig {
   confidenceThreshold?: number;
   maxSizeBytes?: number; // Custom max avatar file size in bytes (default: 1MB)
   failOpenOnAiError?: boolean; // Opsional: jika true, loloskan gambar jika AI Cloudflare Workers error / offline
+  allowAvatarUpload?: boolean; // Opsional: izinkan upload avatar pengguna. Fallback: true. Jika false, upload avatar ditolak.
 }
 
 export interface IImageFilterService {
@@ -30,6 +31,7 @@ export interface IImageFilterService {
 const CONFIDENCE_THRESHOLD = 0.15;
 
 const DEFAULT_BLOCKED_LABELS = [
+  // Pakaian minim, vulgar & konten terlarang
   "bikini",
   "brassiere",
   "miniskirt",
@@ -37,7 +39,39 @@ const DEFAULT_BLOCKED_LABELS = [
   "diaper",
   "sex",
   "sexy",
-  "vulgar"
+  "vulgar",
+  "corset",
+
+  // Identifikasi wanita & busana/aksesoris wanita (ImageNet ResNet-50)
+  "gown",
+  "wig",
+  "lipstick",
+  "bonnet",
+  "veil",
+  "hijab",
+  "abaya",
+  "burqa",
+  "kimono",
+  "stole",
+  "shawl",
+  "cardigan",
+  "poncho",
+  "cloak",
+  "sarong",
+  "overskirt",
+  "hoopskirt",
+  "apron",
+  "bathrobe",
+  "necklace",
+  "earring",
+  "bracelet",
+
+  // Gender & manusia
+  "woman",
+  "female",
+  "girl",
+  "lady",
+  "person",
 ];
 
 export function isSafeUrl(url: string): boolean {

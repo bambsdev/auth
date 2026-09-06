@@ -237,6 +237,32 @@ describe("ImageFilterService Unit Tests (TDD)", () => {
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain("Binding AI tidak tersedia");
   });
+
+  test("should block female images when ResNet-50 detects female indicators (gown, wig, lipstick, veil, woman)", async () => {
+    const femaleLabels = [
+      "gown",
+      "wig",
+      "lipstick",
+      "veil",
+      "hijab",
+      "abaya",
+      "cardigan",
+      "kimono",
+      "woman",
+      "female",
+      "lady",
+    ];
+
+    for (const label of femaleLabels) {
+      const mockAi = createMockAi([{ label, score: 0.85 }]);
+      const service = new ImageFilterService(mockAi);
+      const buffer = new Uint8Array([1, 2, 3]).buffer;
+      const result = await service.isImageBufferAllowed(buffer, "image/jpeg");
+
+      expect(result.allowed).toBe(false);
+      expect(result.reason).toContain(label);
+    }
+  });
 });
 
 

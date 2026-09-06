@@ -305,6 +305,10 @@ export function createSettingRoutes<
         description: "Bad Request (Tipe tidak valid, Terlalu besar, diblokir AI)",
         content: { "application/json": { schema: ErrorResponseSchema } },
       },
+      403: {
+        description: "Forbidden (Upload avatar dinonaktifkan)",
+        content: { "application/json": { schema: ErrorResponseSchema } },
+      },
       500: {
         description: "Internal Server Error (R2 tidak dikonfigurasi, dll)",
         content: { "application/json": { schema: ErrorResponseSchema } },
@@ -316,6 +320,26 @@ export function createSettingRoutes<
     const { settingService, imageFilter, audit } = makeServices(c, dialect);
     const ip = getIp(c);
     const userId = c.var.userId;
+
+    const isAvatarUploadAllowed = (() => {
+      const envVal = c.env?.ALLOW_AVATAR_UPLOAD;
+      if (envVal === false || envVal === "false") return false;
+      const configVal = c.var?.imageFilterConfig?.allowAvatarUpload;
+      if (configVal === false) return false;
+      return true;
+    })();
+
+    if (!isAvatarUploadAllowed) {
+      return c.json(
+        {
+          error: {
+            code: "AVATAR_UPLOAD_DISABLED",
+            message: "Fitur upload avatar dinonaktifkan oleh administrator",
+          },
+        },
+        403,
+      );
+    }
 
     const contentType = c.req.header("content-type") ?? "";
 

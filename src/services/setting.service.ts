@@ -253,9 +253,12 @@ export class SettingService {
       const { updated, oldAvatarUrl } = await this.updateAvatarUrl(userId, null);
       const oldKey = extractR2KeyFromUrl(oldAvatarUrl, bucketPublicUrl);
       if (oldKey && bucket) {
-        bucket.delete(oldKey).catch((err) =>
-          console.error(`[setting] Gagal hapus R2 lama: ${oldKey}`, err)
-        );
+        try {
+          await bucket.delete(oldKey);
+          console.log(`[setting] Berhasil hapus R2 lama: ${oldKey}`);
+        } catch (err) {
+          console.error(`[setting] Gagal hapus R2 lama: ${oldKey}`, err);
+        }
       }
       return { ...updated, blocked: false };
     }
@@ -284,9 +287,12 @@ export class SettingService {
     const { updated, oldAvatarUrl } = await this.updateAvatarUrl(userId, avatarUrl);
     const oldKey = extractR2KeyFromUrl(oldAvatarUrl, bucketPublicUrl);
     if (oldKey && bucket) {
-      bucket.delete(oldKey).catch((err) =>
-        console.error(`[setting] Gagal hapus R2 lama: ${oldKey}`, err)
-      );
+      try {
+        await bucket.delete(oldKey);
+        console.log(`[setting] Berhasil hapus R2 lama: ${oldKey}`);
+      } catch (err) {
+        console.error(`[setting] Gagal hapus R2 lama: ${oldKey}`, err);
+      }
     }
 
     return { ...updated, blocked: false };

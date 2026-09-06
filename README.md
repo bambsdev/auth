@@ -120,6 +120,7 @@ app.use("*", async (c, next) => {
     enabled: true, // set to false to bypass AI moderation
     failOpenOnAiError: true, // allow upload if Workers AI service errors or is unreachable
     confidenceThreshold: 0.50, // detection threshold (default: 0.15)
+    allowAvatarUpload: true, // Optional: set to false to disable avatar uploads (default: true)
   });
   await next();
 });
@@ -169,6 +170,7 @@ Example `wrangler.jsonc` configuration:
     "COOKIE_DOMAIN": ".myapp.com", // Optional, enables first-party root cookie sharing
     "COOKIE_SAME_SITE": "Lax", // Optional, "Lax" | "Strict" | "None"
     "REFRESH_TOKEN_GRACE_PERIOD_SECONDS": "30", // Optional, grace period in seconds (default: 30)
+    "ALLOW_AVATAR_UPLOAD": "true", // Optional: "true" (default) or "false" to disable avatar uploads
     "EMAIL_FROM": "No-Reply <noreply@myapp.com>",
     "BUCKET_PUBLIC_URL": "https://pub-xxx.r2.dev",
     "GOOGLE_CLIENT_ID": "xxx.apps.googleusercontent.com",
@@ -271,7 +273,7 @@ export default {
 | `GET`    | `/api/settings/profile`         | 🔒 Private | Get authenticated user profile                      |
 | `PUT`    | `/api/settings/profile`         | 🔒 Private | Update username (case-insensitive) or full name     |
 | `PUT`    | `/api/settings/password`        | 🔒 Private | Change password (revokes old device sessions)       |
-| `PUT`    | `/api/settings/avatar`          | 🔒 Private | Upload avatar file (Multipart, AI safety check, R2) |
+| `PUT`    | `/api/settings/avatar`          | 🔒 Private | Upload avatar file (Multipart, AI safety check, R2). Returns 403 if disabled via `ALLOW_AVATAR_UPLOAD`. |
 | `DELETE` | `/api/settings/avatar`          | 🔒 Private | Delete avatar and clean up physical file from R2    |
 | `GET`    | `/api/settings/avatar-file/*`   | Public     | Streaming proxy for avatar images from R2           |
 

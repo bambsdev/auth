@@ -5,6 +5,23 @@ Semua perubahan penting pada paket `@bambsdev/auth` didokumentasikan dalam berka
 Format berkas ini mengacu pada [Keep a Changelog](https://keepachangelog.com/id/1.0.0/),
 dan proyek ini mematuhi [Semantic Versioning](https://semver.org/lang/id/).
 
+## [1.4.11] - 2026-09-06
+
+### Diperbaiki (Fixed)
+- **Moderasi Gambar ResNet-50 untuk Identifikasi Wanita & Pakaian Busana Wanita**:
+  - Memperluas `DEFAULT_BLOCKED_LABELS` dengan label ImageNet dan kata kunci busana/identitas perempuan (`gown`, `wig`, `lipstick`, `bonnet`, `veil`, `hijab`, `abaya`, `burqa`, `kimono`, `stole`, `shawl`, `cardigan`, `poncho`, `cloak`, `sarong`, `overskirt`, `hoopskirt`, `apron`, `bathrobe`, `necklace`, `earring`, `bracelet`, `woman`, `female`, `girl`, `lady`, `person`).
+  - Memastikan pengujian gambar perempuan ditolak secara konsisten oleh sistem moderasi avatar.
+- **Pembersihan Bersih File R2 saat Hapus Avatar (`DELETE /avatar`)**:
+  - Memperbaiki `extractR2KeyFromUrl` agar dapat mendeteksi key file R2 secara akurat dari segala variasi URL avatar (termasuk URL dengan query parameter seperti `?t=...`, mount prefix kustom seperti `/settings/avatar-file/`, custom domain, maupun domain default R2).
+  - Memperbaiki penanganan `bucket.delete(oldKey)` di `setting.service.ts` agar di-`await` secara tepat, mencegah pembatalan operasi penghapusan oleh lifecycle runtime Cloudflare Workers saat respon HTTP selesai dikirim.
+
+### Ditambahkan (Added)
+- **Binding & Konfigurasi Pengendali Avatar Consumer (`ALLOW_AVATAR_UPLOAD`)**:
+  - Menambahkan dukungan environment variable / binding `ALLOW_AVATAR_UPLOAD` pada `SharedAuthBindings` dan opsi `allowAvatarUpload` pada `ImageFilterConfig`.
+  - Mengimplementasikan perilaku fallback `true` (jika tidak diset atau bernilai `true`, upload avatar diizinkan; jika diset `false` atau `"false"`, upload avatar ditolak dengan kode `403 AVATAR_UPLOAD_DISABLED`).
+
+---
+
 ## [1.4.10] - 2026-09-06
 
 ### Diperbaiki (Fixed)

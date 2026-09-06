@@ -16,40 +16,54 @@ export function extractR2KeyFromUrl(
   bucketPublicUrl: string | undefined,
   proxyPrefix?: string,
 ): string | null {
-  if (!url) return null;
+  if (!url || typeof url !== "string") return null;
 
   try {
-    const defaultPrefix = proxyPrefix ?? "/api/settings/avatar-file/";
+    // 1. Bersihkan query params (?v=1) atau hash (#xyz) jika ada
+    const cleanUrl = url.split(/[?#]/)[0].trim();
 
-    // 1. Cek apalah url mengandung proxy endpoint (relatif atau absolut sama saja)
-    if (url.includes(defaultPrefix)) {
-      const parts = url.split(defaultPrefix);
-      if (parts.length > 1 && parts[1]) {
-        return parts[1]; // Sisa string adalah key (misal: auth/avatars/123.png)
+    // 2. Cek apakah mengandung prefix standar avatar auth/avatars/
+    // Karena R2UploadService selalu meng-upload dengan prefix "auth/avatars/"
+    const authAvatarIdx = cleanUrl.indexOf("auth/avatars/");
+    if (authAvatarIdx !== -1) {
+      const candidateKey = cleanUrl.slice(authAvatarIdx);
+      if (candidateKey.length > "auth/avatars/".length) {
+        return candidateKey;
       }
     }
 
-    // 2. Cek apakah cocok dengan bucketPublicUrl (jika string R2 public ada)
+    // 3. Cek apakah URL mengandung proxy endpoint "/avatar-file/" terlepas dari mount prefix
+    const avatarFileIdx = cleanUrl.indexOf("/avatar-file/");
+    if (avatarFileIdx !== -1) {
+      const candidateKey = cleanUrl.slice(avatarFileIdx + "/avatar-file/".length);
+      if (candidateKey.length > 0) {
+        return candidateKey;
+      }
+    }
+
+    // 4. Jika ada custom proxyPrefix spesifik
+    const defaultPrefix = proxyPrefix ?? "/api/settings/avatar-file/";
+    if (cleanUrl.includes(defaultPrefix)) {
+      const parts = cleanUrl.split(defaultPrefix);
+      if (parts.length > 1 && parts[1]) {
+        return parts[1];
+      }
+    }
+
+    // 5. Cek apakah cocok dengan bucketPublicUrl (jika string R2 public ada)
     if (bucketPublicUrl) {
-      // Hapus semua trailing slash
       const base = bucketPublicUrl.replace(/\/+$/, "");
-
-      if (url.startsWith(base)) {
-        // Misal: url = https://pub-xxx.r2.dev/auth/avatars/123.png
-        // base = https://pub-xxx.r2.dev
-        let key = url.slice(base.length);
-        // key = /auth/avatars/123.png
+      if (cleanUrl.startsWith(base)) {
+        let key = cleanUrl.slice(base.length);
         if (key.startsWith("/")) key = key.slice(1);
-
         if (key.length > 0) return key;
       }
     }
 
-    // 3. Regex Fallback super agresif untuk memastikan key ketemu meskipun config domain beda
-    // Mencari format: folder/subfolder/UUID.ext
+    // 6. Regex Fallback untuk pola UUID: (folder/)+(UUID.ext)
     const fallbackRegex =
-      /([a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[a-zA-Z0-9]+)$/i;
-    const match = url.match(fallbackRegex);
+      /((?:[a-zA-Z0-9_-]+\/)+[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.[a-zA-Z0-9]+)/i;
+    const match = cleanUrl.match(fallbackRegex);
     if (match && match[1]) {
       return match[1];
     }

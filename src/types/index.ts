@@ -27,6 +27,7 @@ export type SharedAuthBindings = {
   AI: Ai; // Cloudflare Workers AI binding
   R2_PUBLIC?: R2Bucket; // R2 Bucket untuk upload public files
   BUCKET_PUBLIC_URL?: string; // Base URL public bucket (opsional)
+  ALLOW_AVATAR_UPLOAD?: string | boolean; // (Opsional) Mengizinkan upload gambar profil (default: true). Jika false, upload avatar ditolak.
 };
 
 // ── Dialect Specific Bindings ────────────────────────────────────────────────
