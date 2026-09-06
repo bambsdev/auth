@@ -5,6 +5,22 @@ Semua perubahan penting pada paket `@bambsdev/auth` didokumentasikan dalam berka
 Format berkas ini mengacu pada [Keep a Changelog](https://keepachangelog.com/id/1.0.0/),
 dan proyek ini mematuhi [Semantic Versioning](https://semver.org/lang/id/).
 
+## [1.4.10] - 2026-09-06
+
+### Diperbaiki (Fixed)
+- **Kesesuaian Spesifikasi Input Cloudflare Workers AI (`@cf/microsoft/resnet-50`)**:
+  - Memperbaiki konversi buffer gambar menggunakan `Array.from(imageArray)` agar menghasilkan array angka biasa (`number[]`) yang sesuai dengan kontrak schema `AiImageClassificationInput` Cloudflare Workers AI.
+  - Memperbaiki bug di mana `Uint8Array` dikirim secara mentah (`imageArray as any`), yang menyebabkan runtime RPC Cloudflare Workers AI melempar validation exception dan memicu kegagalan upload avatar (`AVATAR_BLOCKED: Deteksi keamanan gambar gagal. Silakan coba lagi nanti.`) pada seluruh gambar normal.
+  - Menambahkan pengecekan eksplisit terhadap ketersediaan binding `this.ai` untuk memberikan peringatan (*warning log*) yang jelas di console jika binding `AI` belum terkonfigurasi di `wrangler`.
+  - Memperbaiki ketatnya typecheck pada `TOKEN_POLICY.web` di route handler login dan callback OAuth Google.
+
+### Ditambahkan (Added)
+- **Opsi `failOpenOnAiError` pada `ImageFilterConfig`**:
+  - Menambahkan flag konfigurasi opsional `failOpenOnAiError?: boolean` (default `false`) pada `ImageFilterConfig`.
+  - Jika diaktifkan (`true`), sistem tetap meloloskan upload gambar avatar apabila service Cloudflare Workers AI sedang mengalami gangguan (*downtime*), kuota harian habis (*rate limited*), atau gagal dipanggil.
+
+---
+
 ## [1.4.9] - 2026-09-04
 
 ### Diperbaiki (Fixed)

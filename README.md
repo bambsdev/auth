@@ -115,6 +115,12 @@ const emailConfig: EmailConfig = {
 
 app.use("*", async (c, next) => {
   c.set("emailConfig", emailConfig);
+  // Optional Image Filter Configuration (AI Moderation)
+  c.set("imageFilterConfig", {
+    enabled: true, // set to false to bypass AI moderation
+    failOpenOnAiError: true, // allow upload if Workers AI service errors or is unreachable
+    confidenceThreshold: 0.50, // detection threshold (default: 0.15)
+  });
   await next();
 });
 

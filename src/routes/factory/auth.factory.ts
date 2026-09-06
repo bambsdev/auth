@@ -395,7 +395,7 @@ export function createAuthRoutes<
       audit.log({ event: "login_success", clientType, ip, metadata: { email } });
 
       if (clientType === "web") {
-        const policy = TOKEN_POLICY[clientType] ?? TOKEN_POLICY.web;
+        const policy = TOKEN_POLICY.web;
         const cookieOpts = getAuthCookieOptions(c, policy.refreshToken.expiresInSeconds);
         const cookieName = getAuthCookieName(c);
         setCookie(c, cookieName, tokens.refreshToken, cookieOpts);
@@ -1384,7 +1384,7 @@ export function createAuthRoutes<
       };
 
       if (clientType === "web") {
-        const policy = TOKEN_POLICY[clientType] ?? TOKEN_POLICY.web;
+        const policy = TOKEN_POLICY.web;
         const cookieOpts = getAuthCookieOptions(c, policy.refreshToken.expiresInSeconds);
         const cookieName = getAuthCookieName(c);
         setCookie(c, cookieName, result.refreshToken, cookieOpts);

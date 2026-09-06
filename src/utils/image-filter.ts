@@ -10,6 +10,7 @@ export interface ImageFilterConfig {
   blockedLabels?: string[];
   confidenceThreshold?: number;
   maxSizeBytes?: number; // Custom max avatar file size in bytes (default: 1MB)
+  failOpenOnAiError?: boolean; // Opsional: jika true, loloskan gambar jika AI Cloudflare Workers error / offline
 }
 
 export interface IImageFilterService {
@@ -88,9 +89,9 @@ export class ImageFilterService implements IImageFilterService {
   ) {}
 
   /**
-   * Periksa apakah gambar di URL mengandung konten terlarang.
-   * Return { allowed, reason? }
-   */
+    * Periksa apakah gambar di URL mengandung konten terlarang.
+    * Return { allowed, reason? }
+    */
   async isImageAllowed(
     imageUrl: string,
   ): Promise<{ allowed: boolean; reason?: string }> {
@@ -101,6 +102,14 @@ export class ImageFilterService implements IImageFilterService {
 
       if (!isSafeUrl(imageUrl)) {
         return { allowed: false, reason: "URL gambar tidak valid atau tidak diizinkan" };
+      }
+
+      if (!this.ai) {
+        console.warn("[image-filter] Cloudflare Workers AI binding ('AI') is missing or undefined.");
+        if (this.config?.failOpenOnAiError) {
+          return { allowed: true };
+        }
+        return { allowed: false, reason: "Deteksi keamanan gambar gagal. Binding AI tidak tersedia." };
       }
 
       // 1. Fetch image
@@ -120,7 +129,7 @@ export class ImageFilterService implements IImageFilterService {
       // 2. Classify Image menggunakan @cf/microsoft/resnet-50
       try {
         const detections = (await this.ai.run("@cf/microsoft/resnet-50" as any, {
-          image: imageArray as any,
+          image: Array.from(imageArray),
         }) as unknown) as { label: string; score: number }[];
 
         if (detections && Array.isArray(detections)) {
@@ -147,6 +156,10 @@ export class ImageFilterService implements IImageFilterService {
           return { allowed: false, reason: "Batas penggunaan fitur deteksi gambar harian tercapai. Silakan coba unggah kembali esok hari." };
         }
         console.warn("[image-filter] Classification failed:", detErr?.message ?? detErr);
+        if (this.config?.failOpenOnAiError) {
+          console.warn("[image-filter] failOpenOnAiError is enabled, allowing image despite AI classification failure.");
+          return { allowed: true };
+        }
         return { allowed: false, reason: "Deteksi keamanan gambar gagal. Silakan coba lagi nanti." };
       }
       return { allowed: true };
@@ -157,8 +170,8 @@ export class ImageFilterService implements IImageFilterService {
   }
 
   /**
-   * Filter langsung dari ArrayBuffer
-   */
+    * Filter langsung dari ArrayBuffer
+    */
   async isImageBufferAllowed(
     buffer: ArrayBuffer,
     contentType: string,
@@ -172,12 +185,20 @@ export class ImageFilterService implements IImageFilterService {
         return { allowed: false, reason: "File bukan gambar yang valid" };
       }
 
+      if (!this.ai) {
+        console.warn("[image-filter] Cloudflare Workers AI binding ('AI') is missing or undefined.");
+        if (this.config?.failOpenOnAiError) {
+          return { allowed: true };
+        }
+        return { allowed: false, reason: "Deteksi keamanan gambar gagal. Binding AI tidak tersedia." };
+      }
+
       const imageArray = new Uint8Array(buffer);
 
       // 2. Classify Image (Buffer)
       try {
         const detections = (await this.ai.run("@cf/microsoft/resnet-50" as any, {
-          image: imageArray as any,
+          image: Array.from(imageArray),
         }) as unknown) as { label: string; score: number }[];
 
         if (detections && Array.isArray(detections)) {
@@ -204,6 +225,10 @@ export class ImageFilterService implements IImageFilterService {
           return { allowed: false, reason: "Batas penggunaan fitur deteksi gambar harian tercapai. Silakan coba unggah kembali esok hari." };
         }
         console.warn("[image-filter] Classification failed (buffer):", detErr?.message ?? detErr);
+        if (this.config?.failOpenOnAiError) {
+          console.warn("[image-filter] failOpenOnAiError is enabled, allowing image despite AI classification failure.");
+          return { allowed: true };
+        }
         return { allowed: false, reason: "Deteksi keamanan gambar gagal. Silakan coba lagi nanti." };
       }
       return { allowed: true };

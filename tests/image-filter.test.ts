@@ -187,5 +187,56 @@ describe("ImageFilterService Unit Tests (TDD)", () => {
       expect(result.reason).toContain("tidak valid atau tidak diizinkan");
     }
   });
+
+  test("should pass image as standard number[] array to AI.run per Cloudflare Workers AI spec", async () => {
+    let capturedInput: any;
+    const mockAi = {
+      run: async (model: string, input: any) => {
+        capturedInput = input;
+        return [];
+      },
+    } as any;
+
+    const service = new ImageFilterService(mockAi);
+    const buffer = new Uint8Array([255, 216, 255, 224]).buffer;
+    const result = await service.isImageBufferAllowed(buffer, "image/jpeg");
+
+    expect(result.allowed).toBe(true);
+    expect(capturedInput).toBeDefined();
+    expect(Array.isArray(capturedInput.image)).toBe(true);
+    expect(capturedInput.image).toEqual([255, 216, 255, 224]);
+  });
+
+  test("should fail-open if failOpenOnAiError is enabled when AI classification throws", async () => {
+    const mockAi = {
+      run: async () => {
+        throw new Error("Internal Workers AI error");
+      },
+    } as any;
+
+    const service = new ImageFilterService(mockAi, { failOpenOnAiError: true });
+    const buffer = new Uint8Array([1, 2, 3]).buffer;
+    const result = await service.isImageBufferAllowed(buffer, "image/png");
+
+    expect(result.allowed).toBe(true);
+  });
+
+  test("should handle missing AI binding gracefully when failOpenOnAiError is enabled", async () => {
+    const service = new ImageFilterService(undefined as any, { failOpenOnAiError: true });
+    const buffer = new Uint8Array([1, 2, 3]).buffer;
+    const result = await service.isImageBufferAllowed(buffer, "image/png");
+
+    expect(result.allowed).toBe(true);
+  });
+
+  test("should reject with clear reason if AI binding is missing and failOpenOnAiError is not set", async () => {
+    const service = new ImageFilterService(undefined as any);
+    const buffer = new Uint8Array([1, 2, 3]).buffer;
+    const result = await service.isImageBufferAllowed(buffer, "image/png");
+
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toContain("Binding AI tidak tersedia");
+  });
 });
+
 
