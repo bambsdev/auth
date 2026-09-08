@@ -121,7 +121,16 @@ export const resetPasswordSchema = z.object({
     .max(64, "Password baru maksimal 64 karakter")
     .regex(/[a-zA-Z]/, "Password baru harus mengandung huruf")
     .regex(/[0-9]/, "Password baru harus mengandung angka")
+    .optional()
     .openapi({ example: "Password123", description: "Password baru" }),
+  password: z
+    .string()
+    .min(8, "Password baru minimal 8 karakter")
+    .max(64, "Password baru maksimal 64 karakter")
+    .regex(/[a-zA-Z]/, "Password baru harus mengandung huruf")
+    .regex(/[0-9]/, "Password baru harus mengandung angka")
+    .optional()
+    .openapi({ example: "Password123", description: "Password baru (alias)" }),
 }).openapi("ResetPasswordRequest");
 
 // ── Google Token (Mobile Flow) ────────────────────────────────────────────────

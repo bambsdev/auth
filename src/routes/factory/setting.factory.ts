@@ -5,6 +5,7 @@ import { AuthService } from "../../services/auth.service";
 import { AuditService } from "../../services/audit.service";
 import { SettingService } from "../../services/setting.service";
 import { R2UploadService } from "../../services/r2-upload.service";
+import { DeleteAccountService, type DeleteAccountHook } from "../../services/delete-account.service";
 import { ImageFilterService } from "../../utils/image-filter";
 import { authMiddleware } from "../../middleware/auth.middleware";
 import {
@@ -14,10 +15,33 @@ import {
 import {
   ErrorResponseSchema,
   TokenResponseSchema,
+  BasicMessageSchema,
 } from "../../utils/openapi-schemas";
 import type { SharedAuthBindings, JWTAccessPayload } from "../../types/index";
 import type { AuthDbDialect } from "../../db/adapter";
 import { type AppContext, getIp, errorResponse } from "./shared";
+
+// ── Options Type ──────────────────────────────────────────────────────────────
+
+/**
+ * Opsi konfigurasi untuk `createSettingRoutes`.
+ */
+export interface SettingRoutesOptions {
+  /**
+   * Hook yang dipanggil sesaat sebelum data user dianonimkan saat penghapusan akun.
+   * Dijalankan **di dalam transaksi DB** — jika throw error, seluruh operasi dibatalkan.
+   *
+   * Gunakan ini untuk cleanup data consumer (misal: suspend toko, batalkan sewa, dll.)
+   *
+   * @example
+   * createSettingRoutes("pg", {
+   *   onBeforeDeleteAccount: async (userId, db) => {
+   *     await db.update(stores).set({ status: "suspended" }).where(eq(stores.userId, userId));
+   *   }
+   * });
+   */
+  onBeforeDeleteAccount?: DeleteAccountHook;
+}
 
 function makeServices(c: AppContext, dialect: AuthDbDialect) {
   const db = c.var.db;
@@ -31,14 +55,15 @@ function makeServices(c: AppContext, dialect: AuthDbDialect) {
   );
   const imageFilter = new ImageFilterService(c.env.AI, c.var.imageFilterConfig);
   const settingService = new SettingService(db, authService, imageFilter, dialect);
+  const deleteAccountService = new DeleteAccountService(db, authService, dialect);
   const audit = new AuditService(c.env.ANALYTICS);
-  return { settingService, cacheService, imageFilter, audit };
+  return { settingService, deleteAccountService, cacheService, authService, imageFilter, audit };
 }
 
 export function createSettingRoutes<
   TBindings extends SharedAuthBindings = any,
   TVariables extends Record<string, any> = any,
->(dialect: AuthDbDialect = "pg") {
+>(dialect: AuthDbDialect = "pg", options: SettingRoutesOptions = {}) {
   const settingRoutes = new OpenAPIHono<{
     Bindings: TBindings;
     Variables: TVariables;
@@ -606,6 +631,68 @@ export function createSettingRoutes<
     if (object.etag) headers.set("ETag", object.etag);
 
     return new Response(object.body, { headers });
+  });
+
+  // ── Delete Account ────────────────────────────────────────────────────────
+
+  const deleteAccountRoute = createRoute({
+    method: "delete",
+    path: "/account",
+    tags: ["Settings"],
+    summary: "Delete My Account",
+    description:
+      "Menghapus akun pengguna secara permanen dengan strategi anonymization. " +
+      "Data identitas pribadi (email, nama, password, avatar) dianonimkan. " +
+      "Seluruh sesi aktif dicabut (refresh tokens di-revoke). " +
+      "Data transaksi dan keuangan tetap tersimpan untuk keperluan audit.",
+    security: [{ Bearer: [] }],
+    responses: {
+      200: {
+        description: "Akun berhasil dihapus",
+        content: {
+          "application/json": {
+            schema: z.object({
+              message: z.string().openapi({ example: "Akun berhasil dihapus" }),
+            }),
+          },
+        },
+      },
+      401: {
+        description: "Tidak terautentikasi",
+        content: { "application/json": { schema: ErrorResponseSchema } },
+      },
+      409: {
+        description: "Akun sudah dihapus sebelumnya",
+        content: { "application/json": { schema: ErrorResponseSchema } },
+      },
+      500: {
+        description: "Terjadi kesalahan pada server",
+        content: { "application/json": { schema: ErrorResponseSchema } },
+      },
+    },
+  });
+
+  settingRoutes.openapi(deleteAccountRoute, async (c) => {
+    try {
+      const { deleteAccountService, audit } = makeServices(c as any, dialect);
+      const userId = c.var.userId as string;
+
+      await deleteAccountService.deleteAccount(
+        userId,
+        options.onBeforeDeleteAccount,
+      );
+
+      audit.log({
+        event: "account_deleted",
+        userId,
+        ip: getIp(c as any),
+        metadata: { userAgent: c.req.header("User-Agent") ?? "" },
+      });
+
+      return c.json({ message: "Akun berhasil dihapus" }, 200);
+    } catch (err: any) {
+      return errorResponse(c as any, err);
+    }
   });
 
   return settingRoutes;

@@ -32,6 +32,8 @@ export const users = sqliteTable(
       () => new Date(),
     ),
     deletedAt: integer("deleted_at", { mode: "timestamp" }),
+    isDeleted: integer("is_deleted", { mode: "boolean" }).default(false), // true = akun telah dihapus (soft delete)
+    isAnonymized: integer("is_anonymized", { mode: "boolean" }).default(false), // true = akun dihapus & data sudah dianonimkan
   },
   (table) => ({
     usersActiveIdx: index("users_active_idx")

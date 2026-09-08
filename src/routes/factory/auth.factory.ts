@@ -1511,7 +1511,14 @@ export function createAuthRoutes<
   });
 
   authRoutes.openapi(resetPasswordRoute, async (c: any) => {
-    const { token, newPassword } = c.req.valid("json");
+    const { token, newPassword, password } = c.req.valid("json");
+    const targetPassword = newPassword || password;
+    if (!targetPassword) {
+      return c.json(
+        { error: { code: "VALIDATION_ERROR", message: "Password baru wajib diisi" } },
+        400,
+      );
+    }
     const { passwordResetService, cacheService, audit } = makeServices(c, dialect);
     const ip = getIp(c);
 
@@ -1524,7 +1531,7 @@ export function createAuthRoutes<
     }
 
     try {
-      const result = await passwordResetService.resetPassword(token, newPassword);
+      const result = await passwordResetService.resetPassword(token, targetPassword);
       await cacheService.clearRateLimit(rateLimitKey);
 
       audit.log({

@@ -35,6 +35,8 @@ export const users = pgTable("users", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow(),
   deletedAt: timestamp("deleted_at", { withTimezone: true }),
+  isDeleted: boolean("is_deleted").default(false), // true = akun telah dihapus (soft delete)
+  isAnonymized: boolean("is_anonymized").default(false), // true = akun dihapus & data sudah dianonimkan
 }, (table) => ({
   usersActiveIdx: index("users_active_idx").on(table.id).where(sql`deleted_at IS NULL`),
 }));

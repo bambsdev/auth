@@ -18,6 +18,9 @@ export { VerificationService } from "./services/verification.service";
 export { PasswordResetService } from "./services/password-reset.service";
 export { SettingService } from "./services/setting.service";
 export { GoogleOAuthService } from "./services/google.service";
+export { DeleteAccountService } from "./services/delete-account.service";
+export type { DeleteAccountHook } from "./services/delete-account.service";
+export type { SettingRoutesOptions } from "./routes/factory/setting.factory";
 export {
   cleanupExpiredTokens,
   cleanupExpiredPasswordResets,

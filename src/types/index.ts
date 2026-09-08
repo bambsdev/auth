@@ -134,4 +134,6 @@ export type AuditEvent =
   | "avatar_blocked"
   // Password Reset
   | "forgot_password_requested"
-  | "password_reset_success";
+  | "password_reset_success"
+  // Account Deletion
+  | "account_deleted";

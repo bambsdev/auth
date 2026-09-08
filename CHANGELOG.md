@@ -5,6 +5,21 @@ Semua perubahan penting pada paket `@bambsdev/auth` didokumentasikan dalam berka
 Format berkas ini mengacu pada [Keep a Changelog](https://keepachangelog.com/id/1.0.0/),
 dan proyek ini mematuhi [Semantic Versioning](https://semver.org/lang/id/).
 
+## [1.4.12] - 2026-09-08
+
+### Ditambahkan (Added)
+- **Fitur Penghapusan Akun Pengguna (`DELETE /settings/account`) dengan Strategi Anonymization**:
+  - Menambahkan service `DeleteAccountService` untuk menganonimkan data pribadi pengguna (`email` diubah menjadi `deleted_<userId>@rakkita.deleted`, `fullName` menjadi "Pengguna Dihapus", `password` dan `avatarUrl` di-null-kan, `isActive` diset `false`, `isDeleted` dan `isAnonymized` diset `true`, serta `deletedAt` dicatat).
+  - Menambahkan dukungan callback hook `onBeforeDeleteAccount` pada `createSettingRoutes` (`SettingRoutesOptions`) yang dijalankan di dalam transaksi DB sebelum data user dianonimkan, memungkinkan consumer melakukan pembersihan data terkait (seperti suspend toko, batalkan sewa, dll.).
+  - Otomatis mencabut seluruh sesi aktif (refresh tokens) dan mem-blacklist access token yang sedang aktif via `CacheService`.
+  - Menghapus akun OAuth tertaut (`oauth_accounts`) pengguna yang dihapus.
+  - Menambahkan kolom `is_deleted` dan `is_anonymized` pada skema tabel `users` (PostgreSQL & D1).
+  - Menambahkan event audit `account_deleted` pada `AuditEvent`.
+- **Dukungan Field Alias Password Baru pada Reset Password**:
+  - Menambahkan dukungan field alias `password` di samping `newPassword` pada skema `/auth/reset-password`.
+
+---
+
 ## [1.4.11] - 2026-09-06
 
 ### Diperbaiki (Fixed)
