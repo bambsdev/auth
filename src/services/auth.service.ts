@@ -440,4 +440,64 @@ export class AuthService {
   async resolveUniqueUsername(base: string): Promise<string> {
     return resolveUniqueUsername(this.adapter, base);
   }
+
+  // ── Handoff (Cross-Client SSO) ────────────────────────────────────────────
+
+  async getUserById(userId: string) {
+    const usersTable = this.adapter.tables.users;
+    return await this.db.query.users.findFirst({
+      where: eq(usersTable.id, userId),
+    });
+  }
+
+  async createHandoffToken(
+    userId: string,
+    redirectUrl?: string,
+    expiresInSeconds: number = 180,
+  ): Promise<string> {
+    return await this.cacheService.createHandoffToken(
+      userId,
+      { redirectUrl },
+      expiresInSeconds,
+    );
+  }
+
+  async exchangeHandoff(
+    token: string,
+    deviceInfo?: Record<string, string>,
+  ): Promise<{
+    tokens: { accessToken: string; refreshToken: string; expiresIn: number };
+    user: {
+      id: string;
+      email: string;
+      fullName: string | null;
+      username: string | null;
+      avatarUrl: string | null;
+    };
+    redirectUrl?: string;
+  }> {
+    const handoff = await this.cacheService.consumeHandoffToken(token);
+    if (!handoff) {
+      fail("Token transfer sesi tidak valid atau telah kedaluwarsa", "INVALID_HANDOFF_TOKEN", 401);
+    }
+
+    const user = await this.getUserById(handoff.userId);
+    if (!user || !user.isActive || user.deletedAt) {
+      fail("Akun pengguna tidak aktif atau telah dihapus", "USER_INACTIVE", 401);
+    }
+
+    const tokens = await this.generateTokenPair(user.id, "web", undefined, deviceInfo);
+
+    return {
+      tokens,
+      user: {
+        id: user.id,
+        email: user.email,
+        fullName: user.fullName ?? null,
+        username: user.username ?? null,
+        avatarUrl: user.avatarUrl ?? null,
+      },
+      redirectUrl: handoff.redirectUrl,
+    };
+  }
 }

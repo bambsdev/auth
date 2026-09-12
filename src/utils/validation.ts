@@ -184,6 +184,41 @@ export const updateAvatarSchema = z.object({
     .openapi({ example: "https://example.com/avatar.jpg", description: "URL avatar" }),
 }).openapi("UpdateAvatarRequest");
 
+// ── Handoff Token (Cross-Client SSO) ──────────────────────────────────────────
+
+export const createHandoffTokenSchema = z.object({
+  redirectUrl: z
+    .string()
+    .max(2000, "URL redirect terlalu panjang")
+    .optional()
+    .openapi({
+      example: "/book/al-hikam",
+      description: "Path atau URL tujuan di aplikasi web setelah proses handoff berhasil",
+    }),
+  expiresInSeconds: z
+    .number()
+    .int("Masa berlaku harus berupa bilangan bulat")
+    .min(30, "Masa berlaku minimal 30 detik")
+    .max(600, "Masa berlaku maksimal 600 detik (10 menit)")
+    .default(180)
+    .optional()
+    .openapi({
+      example: 180,
+      description: "Durasi masa berlaku tiket dalam detik (default: 180 detik / 3 menit)",
+    }),
+}).optional().default({}).openapi("CreateHandoffTokenRequest");
+
+export const exchangeHandoffTokenSchema = z.object({
+  token: z
+    .string()
+    .min(1, "Token handoff wajib diisi")
+    .max(256, "Format token handoff tidak valid")
+    .openapi({
+      example: "e89b12d3c4d5e6f7...",
+      description: "One-time handoff token 64 karakter hex yang didapatkan dari aplikasi pemanggil",
+    }),
+}).openapi("ExchangeHandoffTokenRequest");
+
 // ── Helper: Parse body dengan Zod, throw error standar jika gagal ─────────────
 
 export function parseBody<T>(schema: z.ZodSchema<T>, data: unknown): T {

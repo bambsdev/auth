@@ -136,4 +136,8 @@ export type AuditEvent =
   | "forgot_password_requested"
   | "password_reset_success"
   // Account Deletion
-  | "account_deleted";
+  | "account_deleted"
+  // Handoff (Cross-Client SSO)
+  | "handoff_token_created"
+  | "handoff_success"
+  | "handoff_failed";

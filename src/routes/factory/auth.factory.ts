@@ -33,11 +33,15 @@ import {
   clientTypeSchema,
   verifyEmailSchema,
   verifyEmailCodeSchema,
+  createHandoffTokenSchema,
+  exchangeHandoffTokenSchema,
 } from "../../utils/validation";
 import {
   ErrorResponseSchema,
   TokenResponseSchema,
   BasicMessageSchema,
+  HandoffTokenResponseSchema,
+  ExchangeHandoffResponseSchema,
 } from "../../utils/openapi-schemas";
 import type { SharedAuthBindings, JWTAccessPayload } from "../../types/index";
 import type { AuthDbDialect } from "../../db/adapter";
@@ -251,6 +255,8 @@ export function createAuthRoutes<
   authRoutes.use("/logout-all", authMiddleware as any);
   authRoutes.use("/sessions", authMiddleware as any);
   authRoutes.use("/sessions/*", authMiddleware as any);
+  authRoutes.use("/handoff/token", authMiddleware as any);
+  authRoutes.use("/handoff-token", authMiddleware as any);
 
   // ── Register ─────────────────────────────────────────────────────────────
   const registerRoute = createRoute({
@@ -1551,6 +1557,219 @@ export function createAuthRoutes<
       );
     } catch (err: any) {
       await cacheService.incrementRateLimit(rateLimitKey, 60 * 5);
+      return errorResponse(c, err);
+    }
+  });
+
+  // ── Handoff Token (Mobile-to-Web SSO) ─────────────────────────────────────
+  const createHandoffTokenRoute = createRoute({
+    method: "post",
+    path: "/handoff/token",
+    tags: ["Handoff"],
+    summary: "Buat one-time handoff token",
+    description:
+      "Membuat tiket sementara sekali pakai untuk mentransfer sesi pengguna yang sudah terautentikasi (misalnya dari aplikasi Mobile ke browser Web) tanpa perlu memasukkan kata sandi ulang.",
+    security: [{ BearerAuth: [] }],
+    request: {
+      body: {
+        content: { "application/json": { schema: createHandoffTokenSchema } },
+      },
+    },
+    responses: {
+      200: {
+        description: "Token handoff berhasil dibuat",
+        content: { "application/json": { schema: HandoffTokenResponseSchema } },
+      },
+      401: {
+        description: "Unauthorized",
+        content: { "application/json": { schema: ErrorResponseSchema } },
+      },
+    },
+  });
+
+  const handleCreateHandoffToken = async (c: any) => {
+    const userId = c.get("userId");
+    if (!userId) {
+      return c.json(
+        {
+          error: {
+            code: "UNAUTHORIZED",
+            message: "Token autentikasi tidak valid atau telah kedaluwarsa",
+          },
+        },
+        401,
+      );
+    }
+
+    const { redirectUrl, expiresInSeconds = 180 } = c.req.valid("json") || {};
+    const { authService, audit } = makeServices(c, dialect);
+    const ip = getIp(c);
+
+    const token = await authService.createHandoffToken(
+      userId,
+      redirectUrl,
+      expiresInSeconds,
+    );
+
+    const expiresAt = new Date(
+      Date.now() + expiresInSeconds * 1000,
+    ).toISOString();
+
+    audit.log({
+      event: "handoff_token_created",
+      userId,
+      ip,
+      metadata: { redirectUrl, expiresIn: expiresInSeconds },
+    });
+
+    return c.json(
+      {
+        data: {
+          token,
+          expiresIn: expiresInSeconds,
+          expiresAt,
+          ...(redirectUrl ? { redirectUrl } : {}),
+        },
+      },
+      200,
+    );
+  };
+
+  authRoutes.openapi(createHandoffTokenRoute, handleCreateHandoffToken);
+
+  const createHandoffTokenAliasRoute = createRoute({
+    method: "post",
+    path: "/handoff-token",
+    tags: ["Handoff"],
+    summary: "Buat one-time handoff token (alias)",
+    description: "Alias rute untuk /handoff/token.",
+    security: [{ BearerAuth: [] }],
+    request: {
+      body: {
+        content: { "application/json": { schema: createHandoffTokenSchema } },
+      },
+    },
+    responses: {
+      200: {
+        description: "Token handoff berhasil dibuat",
+        content: { "application/json": { schema: HandoffTokenResponseSchema } },
+      },
+      401: {
+        description: "Unauthorized",
+        content: { "application/json": { schema: ErrorResponseSchema } },
+      },
+    },
+  });
+  authRoutes.openapi(createHandoffTokenAliasRoute, handleCreateHandoffToken);
+
+  const exchangeHandoffRoute = createRoute({
+    method: "post",
+    path: "/handoff/exchange",
+    tags: ["Handoff"],
+    summary: "Tukarkan handoff token menjadi sesi Web",
+    description:
+      "Menukarkan one-time handoff token menjadi sesi Web baru (access token & httpOnly refresh cookie). Token akan langsung hangus setelah ditukarkan.",
+    request: {
+      body: {
+        content: { "application/json": { schema: exchangeHandoffTokenSchema } },
+      },
+    },
+    responses: {
+      200: {
+        description: "Penukaran handoff berhasil",
+        content: {
+          "application/json": { schema: ExchangeHandoffResponseSchema },
+        },
+      },
+      400: {
+        description: "Bad Request (Validation Error)",
+        content: { "application/json": { schema: ErrorResponseSchema } },
+      },
+      401: {
+        description: "Token transfer tidak valid atau telah kedaluwarsa",
+        content: { "application/json": { schema: ErrorResponseSchema } },
+      },
+      429: {
+        description: "Terlalu banyak percobaan",
+        content: { "application/json": { schema: ErrorResponseSchema } },
+      },
+    },
+  });
+
+  authRoutes.openapi(exchangeHandoffRoute, async (c: any) => {
+    const { token } = c.req.valid("json");
+    const { authService, cacheService, audit } = makeServices(c, dialect);
+    const ip = getIp(c);
+    const ua = c.req.header("User-Agent") ?? "";
+
+    const rl = await cacheService.getRateLimit(ip);
+    const limitRes = handleRateLimit(
+      c,
+      rl,
+      RATE_LIMIT_MAX,
+      "Terlalu banyak percobaan penukaran sesi. Coba lagi dalam beberapa saat.",
+    );
+    if (limitRes) {
+      audit.log({ event: "rate_limit_hit", ip });
+      return limitRes;
+    }
+
+    try {
+      const result = await authService.exchangeHandoff(token, {
+        ua,
+        ip,
+        client: "handoff",
+      });
+
+      await cacheService.clearRateLimit(ip);
+      audit.log({
+        event: "handoff_success",
+        clientType: "web",
+        ip,
+        userId: result.user.id,
+        metadata: { email: result.user.email },
+      });
+
+      // Pasang cookie refresh token untuk web client
+      const policy = TOKEN_POLICY.web;
+      const cookieOpts = getAuthCookieOptions(
+        c,
+        policy.refreshToken.expiresInSeconds,
+      );
+      const cookieName = getAuthCookieName(c);
+      setCookie(c, cookieName, result.tokens.refreshToken, cookieOpts);
+
+      return c.json(
+        {
+          data: {
+            message: "Handoff berhasil",
+            accessToken: result.tokens.accessToken,
+            expiresIn: result.tokens.expiresIn,
+            tokenType: "Bearer",
+            ...(result.redirectUrl ? { redirectUrl: result.redirectUrl } : {}),
+            user: result.user,
+          },
+        },
+        200,
+      );
+    } catch (err: any) {
+      if (
+        err.status === 401 ||
+        err.code === "INVALID_HANDOFF_TOKEN" ||
+        err.code === "USER_INACTIVE"
+      ) {
+        await cacheService.incrementRateLimit(ip);
+        audit.log({ event: "handoff_failed", ip });
+        return c.json(
+          {
+            error: {
+              code: err.code || "INVALID_HANDOFF_TOKEN",
+              message: err.message,
+            },
+          },
+          err.status || 401,
+        );
+      }
       return errorResponse(c, err);
     }
   });

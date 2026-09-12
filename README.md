@@ -37,6 +37,11 @@ This package follows a **Clean Service Layer Architecture**. Business logic is s
 - **Adaptive Cookie Management**: Configurable cookie name (`COOKIE_NAME`) and domain (`COOKIE_DOMAIN`) with `HttpOnly`, `Secure`, and adaptive `SameSite` (`Lax` for first-party root sharing, `None` for cross-site dev/preview environments).
 - **Two-Tier Edge Cache**: L1 Cache API + L2 KV caching with negative caching (`"0"`) reducing KV read costs by up to 99%.
 
+### 📲 Cross-Client Session Handoff (Mobile-to-Web SSO)
+- **One-Time Magic Ticket**: Enables seamless session transfer from mobile applications to mobile browsers / web checkout without forcing users to re-enter credentials.
+- **Zero Replay Attacks**: Tokens are cryptographically secure 64-character hex strings stored temporarily in Cloudflare KV with a short TTL (default 180s / 3 minutes) and destroyed immediately upon exchange.
+- **Target Redirection**: Supports optional `redirectUrl` parameter to route users directly to specific destinations (e.g. checkout, invoice, or library) with active session state.
+
 ### 📨 Flexible Email Verification & Password Reset
 - **Verification Modes**: Choose between **6-digit numeric OTP codes** or **URL verification links** (`verificationMethod: "code" | "link"`).
 - **Customizable Templates**: Fully customizable email templates and configurable OTP TTL.
@@ -265,6 +270,8 @@ export default {
 | `POST`   | `/auth/google/token`        | Public     | 5 / 5 min  | Verify Google ID token from Native Mobile SDK          |
 | `POST`   | `/auth/forgot-password`     | Public     | 3 / 5 min  | Request password reset link email                      |
 | `POST`   | `/auth/reset-password`      | Public     | 10 / 5 min | Reset password using 64-character hex token            |
+| `POST`   | `/auth/handoff/token`       | 🔒 Private | -          | Generate short-lived one-time handoff token for Web SSO (alias: `/auth/handoff-token`) |
+| `POST`   | `/auth/handoff/exchange`    | Public     | 5 / 5 min  | Exchange one-time handoff token for Web session (`accessToken` + HttpOnly cookie) |
 
 ### 👤 Settings Endpoints (`/api/settings`)
 

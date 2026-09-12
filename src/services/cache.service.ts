@@ -238,6 +238,66 @@ export class CacheService {
     return null;
   }
 
+  // ── Handoff Token (Cross-Client SSO) ──────────────────────────────────────
+
+  /**
+   * Membuat one-time handoff token untuk transfer sesi antar-klien (misal: Mobile ke Web).
+   * Token disimpan di KV dengan TTL singkat (default 180 detik / 3 menit).
+   */
+  async createHandoffToken(
+    userId: string,
+    data?: { redirectUrl?: string },
+    ttlSeconds: number = 180,
+  ): Promise<string> {
+    const buf = crypto.getRandomValues(new Uint8Array(32));
+    const token = Array.from(buf)
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+
+    const key = `handoff:${token}`;
+    const safeTtl = Math.max(30, Math.min(600, ttlSeconds));
+    const payload = JSON.stringify({
+      userId,
+      redirectUrl: data?.redirectUrl,
+      createdAt: Date.now(),
+    });
+
+    await this.kv.put(key, payload, {
+      expirationTtl: safeTtl,
+    });
+
+    return token;
+  }
+
+  /**
+   * Mengambil dan langsung menghapus handoff token dari KV (One-time use).
+   * Mengembalikan data handoff jika valid, atau null jika tidak ditemukan / sudah kedaluwarsa / sudah terpakai.
+   */
+  async consumeHandoffToken(
+    token: string,
+  ): Promise<{ userId: string; redirectUrl?: string; createdAt?: number } | null> {
+    if (!token || typeof token !== "string") return null;
+
+    const key = `handoff:${token}`;
+    const raw = await this.kv.get(key);
+    if (!raw) return null;
+
+    // Hapus seketika dari KV agar tidak dapat digunakan lagi (One-time consumption)
+    await this.kv.delete(key);
+
+    try {
+      const data = JSON.parse(raw);
+      if (!data?.userId) return null;
+      return {
+        userId: data.userId,
+        redirectUrl: data.redirectUrl,
+        createdAt: data.createdAt,
+      };
+    } catch {
+      return null;
+    }
+  }
+
   // ── Helpers ───────────────────────────────────────────────────────────────
 
   private key(k: string): Request {

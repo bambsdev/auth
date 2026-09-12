@@ -5,6 +5,21 @@ Semua perubahan penting pada paket `@bambsdev/auth` didokumentasikan dalam berka
 Format berkas ini mengacu pada [Keep a Changelog](https://keepachangelog.com/id/1.0.0/),
 dan proyek ini mematuhi [Semantic Versioning](https://semver.org/lang/id/).
 
+## [1.4.13] - 2026-09-12
+
+### Ditambahkan (Added)
+- **Fitur Cross-Client Session Handoff (Mobile-to-Web SSO) via One-Time Magic Ticket**:
+  - Menambahkan endpoint `POST /auth/handoff/token` (dan alias `POST /auth/handoff-token`) yang dilindungi `authMiddleware` untuk menghasilkan tiket transfer sesi sementara sekali pakai (64 karakter hex cryptographically random, TTL default 180 detik / 3 menit) dari klien terotentikasi (seperti aplikasi mobile).
+  - Menambahkan endpoint publik ber-rate-limit `POST /auth/handoff/exchange` untuk menukarkan tiket handoff menjadi sesi Web resmi (`accessToken` di response JSON + `refresh_token` di httpOnly Secure cookie).
+  - Menjamin sifat **One-Time Consumption (Sekali Pakai)** di mana tiket langsung dihapus seketika dari KV saat penukaran, mencegah serangan *replay* atau penyalahgunaan tiket.
+  - Mendukung parameter opsional `redirectUrl` untuk mengarahkan pengguna secara instan ke halaman target (seperti checkout buku, invoice pembayaran, atau library) tanpa perlu login manual lagi di browser.
+  - Menambahkan method `createHandoffToken` dan `consumeHandoffToken` pada `CacheService`.
+  - Menambahkan method `getUserById`, `createHandoffToken`, dan `exchangeHandoff` pada `AuthService`.
+  - Menambahkan event audit `handoff_token_created`, `handoff_success`, dan `handoff_failed` pada `AuditEvent`.
+  - Menambahkan skema Zod OpenAPI `createHandoffTokenSchema`, `exchangeHandoffTokenSchema`, `HandoffTokenResponseSchema`, dan `ExchangeHandoffResponseSchema`.
+
+---
+
 ## [1.4.12] - 2026-09-08
 
 ### Ditambahkan (Added)
